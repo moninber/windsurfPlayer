@@ -25,36 +25,63 @@ bool MediaDatabase::connect(const std::string& host, const std::string& user,
                              int port)
 {
     try {
-        // 获取MySQL驱动实例（全局单例，由Connector/C++管理生命周期）
+        std::cout << "[Database] 正在尝试获取驱动实例..." << std::endl;
         driver_ = sql::mysql::get_mysql_driver_instance();
 
-        // 构建连接URL：tcp://host:port
-        std::string url = "tcp://" + host + ":" + std::to_string(port);
-
-        // 建立连接
-        connection_ = driver_->connect(url, user, password);
-
-        if (!connection_->isValid()) {
-            last_error_ = "数据库连接无效";
-            delete connection_;
-            connection_ = nullptr;
+        if (!driver_) {
+            last_error_ = "无法获取 MySQL 驱动实例";
             return false;
         }
 
-        // 选择数据库
-        connection_->setSchema(database);
-        database_name_ = database;
+        // 构建连接参数映射，这种方式有时比直接传递字符串更稳定
+        sql::ConnectOptionsMap connection_options;
+        connection_options["hostName"] = host;
+        connection_options["userName"] = user;
+        connection_options["password"] = password;
+        connection_options["schema"]   = database;
+        connection_options["port"]     = port;
+        connection_options["OPT_RECONNECT"] = true;
 
-        std::cout << "[Database] 连接成功: " << url << " / " << database << std::endl;
+        std::string url = "tcp://" + host + ":" + std::to_string(port);
+        std::cout << "[Database] 准备连接到: " << url << std::endl;
+
+        // 建立连接
+        // 如果在此处发生异常，通常是由于：
+        // 1. Debug 模式链接了 Release 版的 mysqlcppconn.lib (导致 std::string 崩溃)
+        // 2. 缺少依赖的 DLL (libcrypto-3-x64.dll, libssl-3-x64.dll)
+        // 3. MySQL 服务未启动或防火墙拦截
+        connection_ = driver_->connect(connection_options);
+
+        if (!connection_ || !connection_->isValid()) {
+            last_error_ = "数据库连接无效";
+            if (connection_) {
+                delete connection_;
+                connection_ = nullptr;
+            }
+            return false;
+        }
+
+        database_name_ = database;
+        std::cout << "[Database] 连接成功: " << host << " / " << database << std::endl;
         return true;
     }
     catch (const sql::SQLException& e) {
-        last_error_ = std::string("MySQL错误: ") + e.what();
+        last_error_ = std::string("MySQL SQL异常: ") + e.what() + " (代码: " + std::to_string(e.getErrorCode()) + ")";
         std::cerr << "[Database] " << last_error_ << std::endl;
         if (connection_) {
             delete connection_;
             connection_ = nullptr;
         }
+        return false;
+    }
+    catch (const std::exception& e) {
+        last_error_ = std::string("标准异常: ") + e.what();
+        std::cerr << "[Database] " << last_error_ << std::endl;
+        return false;
+    }
+    catch (...) {
+        last_error_ = "发生未知异常（极大可能是 Debug 模式链接了 Release 版库导致的内存布局冲突）";
+        std::cerr << "[Database] " << last_error_ << std::endl;
         return false;
     }
 }
@@ -314,13 +341,43 @@ bool MediaDatabase::getMediaById(int id, MediaInfo& info)
         return found;
     }
     catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询失败: ") + e.what();
+        last_error_ = std::string("查询ID失败: ") + e.what();
         return false;
     }
 }
 
 // ============================================================
-// 获取所有媒体
+// 根据路径查询媒体文件
+// ============================================================
+bool MediaDatabase::getMediaByPath(const std::string& path, MediaInfo& info)
+{
+    if (!connection_) return false;
+
+    try {
+        sql::PreparedStatement* pstmt = connection_->prepareStatement(
+            "SELECT * FROM media_library WHERE file_path = ?"
+        );
+        pstmt->setString(1, path);
+
+        sql::ResultSet* rs = pstmt->executeQuery();
+        bool found = false;
+        if (rs->next()) {
+            readMediaFromResultSet(rs, info);
+            found = true;
+        }
+
+        delete rs;
+        delete pstmt;
+        return found;
+    }
+    catch (const sql::SQLException& e) {
+        last_error_ = std::string("查询路径失败: ") + e.what();
+        return false;
+    }
+}
+
+// ============================================================
+// 获取所有媒体文件列表
 // ============================================================
 bool MediaDatabase::getAllMedia(std::vector<MediaInfo>& media_list)
 {

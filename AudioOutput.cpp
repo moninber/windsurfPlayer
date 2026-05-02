@@ -178,6 +178,7 @@ void AudioOutput::cleanup()
     if (audio_client_) {
         audio_client_->Stop();
     }
+    playing_.store(false);
 
     // 释放COM接口（调用Release()减少引用计数）
     // 释放顺序：后获取的先释放

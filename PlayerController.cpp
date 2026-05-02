@@ -191,7 +191,7 @@ void PlayerController::addToPlaylist(const std::string& file)
 void PlayerController::playbackThread()
 {
     AudioVisualizer fft_calculator;
-    fft_calculator.init(64);
+    fft_calculator.init(64, false);
 
     bool audio_ready = false;
     bool audio_paused = false;
@@ -211,6 +211,7 @@ void PlayerController::playbackThread()
     double anchor_pts = current_time_.load();
     const int my_session = session_id_.load();
     float active_speed = std::max(0.25f, speed_.load());
+    const bool use_video_clock = decoder_->hasVideo();
 
     while (!stop_requested_ && playing_ && session_id_.load() == my_session) {
         if (paused_) {
@@ -303,7 +304,9 @@ void PlayerController::playbackThread()
                     video_widget_->setSpectrumData(fft_calculator.getSpectrumData());
                 }
 
-                current_time_ = frame.pts;
+                if (!use_video_clock) {
+                    current_time_ = frame.pts;
+                }
             }
         }
 

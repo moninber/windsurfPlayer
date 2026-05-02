@@ -64,7 +64,7 @@ AudioVisualizer::~AudioVisualizer()
 // ============================================================
 // 初始化
 // ============================================================
-bool AudioVisualizer::init(int bar_count)
+bool AudioVisualizer::init(int bar_count, bool create_gl_resources)
 {
     bar_count_ = bar_count;
     spectrum_data_.resize(bar_count_, 0.0f);
@@ -86,6 +86,10 @@ bool AudioVisualizer::init(int bar_count)
     }
 
     fft_input_.resize(FFT_SIZE);
+
+    if (!create_gl_resources) {
+        return true;
+    }
 
     // --------------------------------------------------------
     // 编译着色器
@@ -167,6 +171,20 @@ void AudioVisualizer::cleanup()
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (shader_program_) { glDeleteProgram(shader_program_); shader_program_ = 0; }
+}
+
+void AudioVisualizer::setSpectrumData(const std::vector<float>& spectrum_data)
+{
+    int count = std::min(bar_count_, (int)spectrum_data.size());
+    for (int i = 0; i < count; i++) {
+        float value = std::max(0.0f, std::min(1.0f, spectrum_data[i]));
+        spectrum_data_[i] = value;
+        smoothed_data_[i] = 0.3f * value + 0.7f * smoothed_data_[i];
+    }
+    for (int i = count; i < bar_count_; i++) {
+        spectrum_data_[i] = 0.0f;
+        smoothed_data_[i] *= 0.7f;
+    }
 }
 
 // ============================================================
@@ -306,6 +324,8 @@ void AudioVisualizer::render(int width, int height)
 {
     if (!shader_program_ || !vao_) return;
 
+    glViewport(0, 0, width, height);
+
     // 构建顶点数据：每个柱状图由2个三角形组成
     std::vector<float> vertices;
     vertices.reserve(bar_count_ * 6 * 5);  // bar * 6顶点 * 5分量
@@ -363,4 +383,5 @@ void AudioVisualizer::render(int width, int height)
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, bar_count_ * 6);
     glBindVertexArray(0);
+    glUseProgram(0);
 }

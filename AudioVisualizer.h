@@ -40,9 +40,10 @@ public:
     /**
      * @brief 初始化可视化器
      * @param bar_count 频谱柱状图数量（默认64）
+     * @param create_gl_resources 是否创建OpenGL资源（默认true）
      * @return true=成功
      */
-    bool init(int bar_count = 64);
+    bool init(int bar_count = 64, bool create_gl_resources = true);
 
     /** @brief 释放资源 */
     void cleanup();
@@ -55,6 +56,12 @@ public:
      * @param sample_rate 采样率
      */
     void processAudioData(const uint8_t* pcm_data, int data_size, int channels, int sample_rate);
+
+    /**
+     * @brief 设置外部计算的频谱数据
+     * @param spectrum_data 频谱数据（归一化振幅，0~1）
+     */
+    void setSpectrumData(const std::vector<float>& spectrum_data);
 
     /**
      * @brief 渲染频谱图

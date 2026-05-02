@@ -47,7 +47,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 | 音频播放 | WASAPI (Windows) | `IAudioClient` / `IAudioRenderClient`, 共享模式, 16-bit PCM |
 | 数据库 | MySQL 8.0 + Connector/C++ | `PreparedStatement`, 事务 |
 | 构建系统 | VS2022 MSVC v143 | x64, C++17标准 |
-## 三、核心 Bug 修复与修改记录
+## 三、核心 Bug 修复与修改记录（完整历史）
 
 ### 3.1 播放倍速 >1.0x 时音频失速/失音
 
@@ -107,23 +107,116 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 
 **注意**：该 workaround 仍未彻底根除偶发卡顿，需要进一步排查根本原因。
 
-### 3.3 当前已知问题与下一步方向
+### 3.3 倍速时播放时间跳动
+
+**症状**：播放速度不为 1.0x 时，时间显示在音频/视频 PTS 之间跳动。
+
+**根因**：
+- 播放循环中同时使用音频 PTS 和视频 PTS 更新 `current_time_`，两者在倍速时更新频率不一致，导致时间显示跳动。
+
+**修复内容**：
+- **PlayerController.cpp**：优先使用视频时钟更新时间，仅在没有视频时使用音频时钟。
+- 代码逻辑：`const bool use_video_clock = decoder_->hasVideo();`，根据此标志选择时间源。
+
+### 3.4 键盘快捷键失效（Space, Up, Down, F）
+
+**症状**：Space（播放/暂停）、Up/Down（音量）、F（收藏）等快捷键无反应。
+
+**根因**：
+- UI 控件（如 VideoWidget）抢占焦点，导致主窗口的 `keyPressEvent` 无法接收到键盘事件。
+- 原实现依赖 `keyPressEvent`，焦点在子控件时父窗口无法捕获按键。
+
+**修复内容**：
+- **MainWindow.cpp**：改用 `QShortcut` 替代 `keyPressEvent` 处理全局快捷键。
+- 设置 `shortcut->setContext(Qt::ApplicationShortcut)` 使快捷键全局生效。
+- **VideoWidget.cpp**：设置 `setFocusPolicy(Qt::NoFocus)` 防止 OpenGL 控件抢占焦点。
+
+### 3.5 退出快捷键从 X 改为 Esc
+
+**症状**：用户希望使用 Esc 键退出，而不是 X 键。
+
+**根因**：
+- 原实现使用 X 键作为退出快捷键，不符合常见习惯。
+
+**修复内容**：
+- **MainWindow.cpp**：移除 X 键快捷键，添加 Esc 键快捷键。
+- 更新菜单帮助文本，将 "退出 (X)" 改为 "退出 (Esc)"。
+- 在 `keyPressEvent` 中添加 Esc 键处理：`if (event->key() == Qt::Key_Escape) close();`
+
+### 3.6 数据库连接异常（Debug 模式崩溃）
+
+**症状**：Debug 模式下连接 MySQL 数据库时程序崩溃。
+
+**根因**：
+- MySQL Connector/C++ 和 FFmpeg 库是 Release 版编译，与 Debug 版本的 STL 运行时二进制不兼容。
+- Debug 版本的 `std::string`、`std::vector` 等容器内存布局与 Release 版不同，导致跨 DLL 边界访问时崩溃。
+
+**修复内容**：
+- **MediaDatabase.cpp**：改用 `sql::ConnectOptionsMap` 设置连接参数，增强异常处理。
+- 添加详细的错误日志输出，便于诊断连接失败原因。
+- **建议**：使用 Release 模式运行程序，避免 Debug/Release 二进制不兼容问题。
+
+### 3.7 F 键收藏功能无反应 + 数据库为空
+
+**症状**：
+- 按 F 键切换收藏状态无反应。
+- 数据库连接成功，但 `media_library` 表为空。
+
+**根因**：
+- 缺少数据库自动同步逻辑：加载文件时未自动插入或更新数据库记录。
+- 缺少路径查询功能：无法判断文件是否已在数据库中。
+- F 键收藏切换未更新数据库和内存状态。
+
+**修复内容**：
+- **MediaDatabase.h/cpp**：新增 `getMediaByPath(path, info)` 方法，根据文件路径查询媒体记录。
+- **MainWindow.cpp**：在 `requestLoadAndPlay()` 中添加数据库自动同步逻辑：
+  - 加载成功后查询文件是否已存在
+  - 若存在：同步数据库中的 `db_id`、`is_favorite`、`title`、`tags` 到内存
+  - 若不存在：调用 `addMedia()` 插入新记录
+  - 调用 `recordPlayHistory()` 记录播放历史
+- **MainWindow.cpp**：F 键快捷键连接到收藏切换逻辑：
+  - 获取当前媒体信息
+  - 切换 `is_favorite` 状态
+  - 调用 `database_->updateMedia(info)` 更新数据库
+  - 调用 `player_->setMediaInfo(info)` 更新内存状态
+
+### 3.8 IntelliSense 错误
+
+**症状**：MediaDatabase.cpp/h 中出现 IntelliSense 报错，不影响编译但影响开发体验。
+
+**根因**：
+- 头文件和源文件中存在重复的函数声明或实现。
+- 缺少必要的头文件包含或命名空间声明。
+
+**修复内容**：
+- **MediaDatabase.h**：清理重复声明，确保所有方法只声明一次。
+- **MediaDatabase.cpp**：移除重复的函数实现，确保每个方法只有一个实现。
+- 添加必要的 `#include` 指令和命名空间声明。
+
+### 3.9 当前已知问题与下一步方向
 
 | 问题 | 状态 | 下一步方向 |
 |------|------|-----------|
 | 倍速音频失音 | **已修复** | 持续测试 0.25x~4.0x 全范围 |
+| 倍速时间跳动 | **已修复** | 测试确认视频时钟优先逻辑稳定 |
 | 切换视频偶发卡顿 | **缓解，未根除** | 排查 `AudioOutput` 残留缓冲区、`AVCodecContext` flush、WASAPI 重新初始化 |
-| 必须手动 pause/play 才能恢复 | **部分自动化** | 研究根本原因：可能是音频输出端未正确 reset，或解码器时间戳基准未重置 |
+| 快捷键失效 | **已修复** | 确认所有快捷键在全局上下文生效 |
+| Esc 退出 | **已修复** | 确认菜单文本已更新 |
+| 数据库同步 | **已修复** | 测试收藏功能和播放历史记录 |
+| F 键收藏 | **已修复** | 测试收藏状态切换和数据库更新 |
+| IntelliSense 错误 | **已修复** | 确认无残留报错 |
 
 ## 四、关键代码变更位置
 
 | 文件 | 变更行范围 | 变更内容 |
 |------|-----------|---------|
-| `MainWindow.h` | 48-50, 104-105, 138-140 | 添加 `requestLoadAndPlay`、原子 ID、加载互斥锁声明 |
-| `MainWindow.cpp` | 49-71, 483-503, 505-515, 552-581, 677-697, 738-808, 871-884 | 实现异步加载、替换所有直接 `loadFile` 调用、自动 pause+清帧+play/pause 周期 |
-| `PlayerController.h` | 125-127 | 添加 `lifecycle_mutex_`（`std::recursive_mutex`）声明 |
-| `PlayerController.cpp` | 40-61, 69-90, 105-126 | `loadFile`、`play`、`stop` 加递归锁；`loadFile` 内调用 `stop` 确保旧线程退出 |
-| `MediaDecoder.cpp/.h` | 多处 | 集成 `AVFilterGraph` / `atempo`，`seek` 时重新初始化滤波图 |
+| `MainWindow.h` | 92-112 | 添加 `setupShortcuts` 方法声明 |
+| `MainWindow.cpp` | 14-34, 461-542, 825-875 | 实现 `setupShortcuts` 全局快捷键（Space, Esc, F, Up/Down）、数据库自动同步逻辑、F 键收藏切换 |
+| `VideoWidget.cpp` | 11-31 | 设置 `setFocusPolicy(Qt::NoFocus)` 防止抢占焦点 |
+| `PlayerController.h` | 76-96 | 添加 `setMediaInfo` 方法声明 |
+| `PlayerController.cpp` | 204-233 | 视频时钟优先逻辑（倍速时间跳动修复） |
+| `MediaDatabase.h` | 95-114 | 添加 `getMediaByPath` 方法声明 |
+| `MediaDatabase.cpp` | 18-93, 315-377, 590-630 | 使用 `ConnectOptionsMap` 连接、实现 `getMediaByPath`、清理重复实现、增强错误处理 |
 
 ## 五、文件清单与阅读顺序建议
 

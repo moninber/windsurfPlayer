@@ -83,6 +83,7 @@ public:
     float getSpeed() const { return speed_.load(); }
     VideoEffect getEffect() const { return current_effect_; }
     const MediaInfo& getMediaInfo() const { return media_info_; }
+    void setMediaInfo(const MediaInfo& info) { media_info_ = info; }
     int getPlaylistIndex() const { return current_playlist_index_; }
     int getPlaylistSize() const { return (int)playlist_.size(); }
 

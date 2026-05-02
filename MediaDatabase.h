@@ -102,6 +102,14 @@ public:
     bool getMediaById(int id, MediaInfo& info);
 
     /**
+     * @brief 根据路径查询媒体文件
+     * @param path 文件完整路径
+     * @param info 输出媒体信息
+     * @return true=找到记录
+     */
+    bool getMediaByPath(const std::string& path, MediaInfo& info);
+
+    /**
      * @brief 获取所有媒体文件列表
      * @param media_list 输出列表
      * @return true=成功

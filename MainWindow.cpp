@@ -21,6 +21,7 @@
 #include <QToolBar>
 #include <QStatusBar>
 #include <QAction>
+#include <QShortcut>
 #include <iostream>
 #include <chrono>
 
@@ -82,7 +83,7 @@ void MainWindow::setupMenuBar()
     menu_file->addAction("打开文件(&O)", QKeySequence::Open, this, &MainWindow::openFile);
     menu_file->addAction("添加到播放列表", this, &MainWindow::addToPlaylist);
     menu_file->addSeparator();
-    menu_file->addAction("退出(&X)", QKeySequence::Quit, this, &QWidget::close);
+    menu_file->addAction("退出(Esc)", QKeySequence(Qt::Key_Escape), this, &QWidget::close);
 
     // 视图菜单
     QMenu* menu_view = menuBar()->addMenu("视图(&V)");
@@ -105,6 +106,7 @@ void MainWindow::setupMenuBar()
             "LEFT/RIGHT - 后退/前进5秒\n"
             "UP/DOWN - 音量增大/减小\n"
             "N/P - 下一曲/上一曲\n"
+            "ESC - 退出程序\n"
             "E - 切换视频特效\n"
             "V - 切换频谱可视化\n"
             "1/2/3/4 - 播放速度 0.5x/1.0x/1.5x/2.0x\n"
@@ -467,7 +469,70 @@ void MainWindow::connectSignals()
         this, &MainWindow::changeSpeed);
 
     // 键盘快捷键
-    // 使用QShortcut或重写keyPressEvent
+    setupShortcuts();
+}
+
+void MainWindow::setupShortcuts()
+{
+    // 播放/暂停 (Space)
+    QShortcut* sc_space = new QShortcut(QKeySequence(Qt::Key_Space), this);
+    sc_space->setContext(Qt::ApplicationShortcut);
+    connect(sc_space, &QShortcut::activated, this, &MainWindow::togglePlayPause);
+
+    // 快进 (Right)
+    QShortcut* sc_right = new QShortcut(QKeySequence(Qt::Key_Right), this);
+    sc_right->setContext(Qt::ApplicationShortcut);
+    connect(sc_right, &QShortcut::activated, this, [this]() {
+        player_->seek(player_->getCurrentTime() + 5.0);
+    });
+
+    // 快退 (Left)
+    QShortcut* sc_left = new QShortcut(QKeySequence(Qt::Key_Left), this);
+    sc_left->setContext(Qt::ApplicationShortcut);
+    connect(sc_left, &QShortcut::activated, this, [this]() {
+        player_->seek(player_->getCurrentTime() - 5.0);
+    });
+
+    // 音量加 (Up)
+    QShortcut* sc_up = new QShortcut(QKeySequence(Qt::Key_Up), this);
+    sc_up->setContext(Qt::ApplicationShortcut);
+    connect(sc_up, &QShortcut::activated, this, [this]() {
+        slider_volume_->setValue(slider_volume_->value() + 5);
+    });
+
+    // 音量减 (Down)
+    QShortcut* sc_down = new QShortcut(QKeySequence(Qt::Key_Down), this);
+    sc_down->setContext(Qt::ApplicationShortcut);
+    connect(sc_down, &QShortcut::activated, this, [this]() {
+        slider_volume_->setValue(slider_volume_->value() - 5);
+    });
+
+    // 下一个 (N)
+    QShortcut* sc_next = new QShortcut(QKeySequence(Qt::Key_N), this);
+    sc_next->setContext(Qt::ApplicationShortcut);
+    connect(sc_next, &QShortcut::activated, this, &MainWindow::nextFile);
+
+    // 上一个 (P)
+    QShortcut* sc_prev = new QShortcut(QKeySequence(Qt::Key_P), this);
+    sc_prev->setContext(Qt::ApplicationShortcut);
+    connect(sc_prev, &QShortcut::activated, this, &MainWindow::prevFile);
+
+    // 收藏 (F)
+    QShortcut* sc_fav = new QShortcut(QKeySequence(Qt::Key_F), this);
+    sc_fav->setContext(Qt::ApplicationShortcut);
+    connect(sc_fav, &QShortcut::activated, this, [this]() {
+        if (db_connected_) {
+            MediaInfo info = player_->getMediaInfo();
+            if (info.db_id > 0) {
+                bool new_state = !info.is_favorite;
+                if (database_->setFavorite(info.db_id, new_state)) {
+                    info.is_favorite = new_state;
+                    player_->setMediaInfo(info);
+                    statusBar()->showMessage(new_state ? "已添加收藏" : "已取消收藏");
+                }
+            }
+        }
+    });
 }
 
 // ============================================================
@@ -774,6 +839,34 @@ void MainWindow::requestLoadAndPlay(const std::string& path, const QString& disp
 
             loaded = player_->loadFile(path);
             if (loaded && request_id == load_request_id_.load()) {
+                // 数据库同步逻辑
+                if (db_connected_) {
+                    MediaInfo info = player_->getMediaInfo();
+                    MediaInfo db_info;
+                    if (database_->getMediaByPath(path, db_info)) {
+                        // 已存在，同步数据库中的 ID 和收藏状态
+                        info.db_id = db_info.db_id;
+                        info.is_favorite = db_info.is_favorite;
+                        info.title = db_info.title;
+                        info.tags = db_info.tags;
+                    }
+                    else {
+                        // 不存在，添加到数据库
+                        int id = database_->addMedia(info);
+                        if (id > 0) {
+                            info.db_id = id;
+                        }
+                    }
+
+                    // 更新 PlayerController 中的信息（包含 db_id）
+                    player_->setMediaInfo(info);
+
+                    // 记录播放历史
+                    if (info.db_id > 0) {
+                        database_->recordPlayHistory(info.db_id);
+                    }
+                }
+
                 player_->play();
                 player_->pause();
                 player_->play();
@@ -824,28 +917,14 @@ bool MainWindow::connectDatabase(const std::string& host, const std::string& use
 // ============================================================
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
+    // 强制捕获 Esc 键退出程序，无论焦点在哪
+    if (event->key() == Qt::Key_Escape) {
+        close();
+        return;
+    }
+
+    // 大多数其他快捷键已通过 setupShortcuts 处理
     switch (event->key()) {
-    case Qt::Key_Space:
-        togglePlayPause();
-        break;
-    case Qt::Key_Right:
-        player_->seek(player_->getCurrentTime() + 5.0);
-        break;
-    case Qt::Key_Left:
-        player_->seek(player_->getCurrentTime() - 5.0);
-        break;
-    case Qt::Key_Up:
-        slider_volume_->setValue(slider_volume_->value() + 5);
-        break;
-    case Qt::Key_Down:
-        slider_volume_->setValue(slider_volume_->value() - 5);
-        break;
-    case Qt::Key_N:
-        nextFile();
-        break;
-    case Qt::Key_P:
-        prevFile();
-        break;
     case Qt::Key_1:
         combo_speed_->setCurrentIndex(1); break;  // 0.5x
     case Qt::Key_2:
@@ -854,16 +933,6 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         combo_speed_->setCurrentIndex(5); break;  // 1.5x
     case Qt::Key_4:
         combo_speed_->setCurrentIndex(6); break;  // 2.0x
-    case Qt::Key_F:
-        // 收藏切换
-        if (db_connected_) {
-            const MediaInfo& info = player_->getMediaInfo();
-            if (info.db_id > 0) {
-                database_->setFavorite(info.db_id, !info.is_favorite);
-                statusBar()->showMessage(info.is_favorite ? "已取消收藏" : "已添加收藏");
-            }
-        }
-        break;
     default:
         QMainWindow::keyPressEvent(event);
     }

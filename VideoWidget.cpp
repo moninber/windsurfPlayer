@@ -18,11 +18,12 @@ VideoWidget::VideoWidget(QWidget* parent)
     // 设置控件属性
     setMinimumSize(640, 360);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setFocusPolicy(Qt::NoFocus);  // 禁止 OpenGL 窗口拦截焦点，让父窗口 MainWindow 统一处理按键
 
     // 启动刷新定时器（约60fps）
     // QTimer在Qt事件循环中触发，确保paintGL()在正确的线程调用
     QObject::connect(&refresh_timer_, &QTimer::timeout, this, [this]() {
-        if (has_new_frame_ || has_new_spectrum_) {
+        if (has_new_frame_ || show_spectrum_) {
             update();  // 请求重绘，Qt会在合适时机调用paintGL()
         }
     });
@@ -53,6 +54,8 @@ void VideoWidget::initializeGL()
     // glewInit可能设置GL_INVALID_ENUM，清除错误
     glGetError();
 
+    glDisable(GL_DEPTH_TEST);
+
     // 输出OpenGL信息
     std::cout << "[VideoWidget] OpenGL版本: " << glGetString(GL_VERSION) << std::endl;
 
@@ -78,7 +81,7 @@ void VideoWidget::paintGL()
         glClear(GL_COLOR_BUFFER_BIT);
 
         std::lock_guard<std::mutex> lock(spectrum_mutex_);
-        if (has_new_spectrum_) {
+        if (visualizer_ && (!spectrum_data_.empty() || has_new_spectrum_)) {
             visualizer_->render(width(), height());
             has_new_spectrum_ = false;
         }
@@ -89,7 +92,7 @@ void VideoWidget::paintGL()
         glClear(GL_COLOR_BUFFER_BIT);
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
-        if (has_new_frame_ && !frame_data_.empty()) {
+        if (!frame_data_.empty()) {
             renderer_->setViewport(0, 0, width(), height());
             renderer_->render(frame_data_.data(), frame_width_, frame_height_);
             has_new_frame_ = false;
@@ -121,12 +124,19 @@ void VideoWidget::setSpectrumData(const std::vector<float>& spectrum)
 {
     std::lock_guard<std::mutex> lock(spectrum_mutex_);
     spectrum_data_ = spectrum;
+    if (visualizer_) {
+        visualizer_->setSpectrumData(spectrum_data_);
+    }
     has_new_spectrum_ = true;
 }
 
 void VideoWidget::setShowSpectrum(bool show)
 {
     show_spectrum_ = show;
+    if (!show) {
+        std::lock_guard<std::mutex> lock(spectrum_mutex_);
+        has_new_spectrum_ = false;
+    }
     update();
 }
 

@@ -99,6 +99,7 @@ private:
     void setupCentralWidget();
     void setupDockWidgets();
     void setupBottomBar();
+    void setupShortcuts();
     void applyDarkTheme();
     void connectSignals();
     void requestLoadAndPlay(const std::string& path, const QString& display_name);
