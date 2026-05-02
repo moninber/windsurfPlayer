@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>MediaStudio</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <QtMsBuild_IncludePath>E:\Qt\6.11.0\msvc2022_64</QtMsBuild_IncludePath>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(QtMsBuild_IncludePath)\msbuild\qt\QtMsBuild.props" Condition="Exists('$(QtMsBuild_IncludePath)\msbuild\qt\QtMsBuild.props')" />
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <!-- ============================================================ -->
+  <!-- Debug|x64 配置 -->
+  <!-- ============================================================ -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;QT_OPENGLWIDGETS_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+E:\Qt\6.11.0\msvc2022_64\include;
+E:\Qt\6.11.0\msvc2022_64\include\QtCore;
+E:\Qt\6.11.0\msvc2022_64\include\QtGui;
+E:\Qt\6.11.0\msvc2022_64\include\QtWidgets;
+E:\Qt\6.11.0\msvc2022_64\include\QtOpenGL;
+E:\Qt\6.11.0\msvc2022_64\include\QtOpenGLWidgets;
+E:\OpenGl\glad\include;
+E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\include;
+E:\OpenGl\glm-0.9.8.5\glm;
+E:\ffmpeg\include;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\include\jdbc\cppconn;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\include\jdbc;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\include;
+C:\Program Files\MySQL\MySQL Server 8.0\include;
+%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>
+E:\Qt\6.11.0\msvc2022_64\lib;
+E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\lib\Release\x64;
+E:\ffmpeg\lib;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\lib64\vs14;
+C:\Program Files\MySQL\MySQL Server 8.0\lib;
+%(AdditionalLibraryDirectories)
+      </AdditionalLibraryDirectories>
+      <AdditionalDependencies>
+opengl32.lib;
+glew32.lib;
+Qt6Cored.lib;
+Qt6Guid.lib;
+Qt6Widgetsd.lib;
+Qt6OpenGLd.lib;
+Qt6OpenGLWidgetsd.lib;
+Qt6EntryPointd.lib;
+avcodec.lib;
+avformat.lib;
+avdevice.lib;
+avutil.lib;
+avfilter.lib;
+swresample.lib;
+swscale.lib;
+mysqlcppconn.lib;
+mysqlcppconnx.lib;
+libmysql.lib;
+%(AdditionalDependencies)
+      </AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- ============================================================ -->
+  <!-- Release|x64 配置 -->
+  <!-- ============================================================ -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;QT_OPENGLWIDGETS_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+E:\Qt\6.11.0\msvc2022_64\include;
+E:\Qt\6.11.0\msvc2022_64\include\QtCore;
+E:\Qt\6.11.0\msvc2022_64\include\QtGui;
+E:\Qt\6.11.0\msvc2022_64\include\QtWidgets;
+E:\Qt\6.11.0\msvc2022_64\include\QtOpenGL;
+E:\Qt\6.11.0\msvc2022_64\include\QtOpenGLWidgets;
+E:\OpenGl\glad\include;
+E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\include;
+E:\OpenGl\glm-0.9.8.5\glm;
+E:\ffmpeg\include;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\include\jdbc;
+C:\Program Files\MySQL\MySQL Server 8.0\include;
+%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>
+E:\Qt\6.11.0\msvc2022_64\lib;
+E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\lib\Release\x64;
+E:\ffmpeg\lib;
+C:\Program Files\MySQL\mysql-connector-c++-9.6.0-winx64\mysql-connector-c++-9.6.0-winx64\lib64\vs14;
+C:\Program Files\MySQL\MySQL Server 8.0\lib;
+%(AdditionalLibraryDirectories)
+      </AdditionalLibraryDirectories>
+      <AdditionalDependencies>
+opengl32.lib;
+glew32.lib;
+Qt6Core.lib;
+Qt6Gui.lib;
+Qt6Widgets.lib;
+Qt6OpenGL.lib;
+Qt6OpenGLWidgets.lib;
+Qt6EntryPoint.lib;
+avcodec.lib;
+avformat.lib;
+avdevice.lib;
+avutil.lib;
+avfilter.lib;
+swresample.lib;
+swscale.lib;
+mysqlcppconn.lib;
+mysqlcppconnx.lib;
+libmysql.lib;
+%(AdditionalDependencies)
+      </AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- ============================================================ -->
+  <!-- 源文件列表 -->
+  <!-- ============================================================ -->
+  <ItemGroup>
+    <ClCompile Include="glad.c" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="MediaDecoder.cpp" />
+    <ClCompile Include="AudioOutput.cpp" />
+    <ClCompile Include="VideoRenderer.cpp" />
+    <ClCompile Include="AudioVisualizer.cpp" />
+    <ClCompile Include="MediaTranscoder.cpp" />
+    <ClCompile Include="MediaDatabase.cpp" />
+    <ClCompile Include="PlayerController.cpp" />
+    <ClCompile Include="VideoWidget.cpp" />
+    <ClCompile Include="MainWindow.cpp" />
+    <ClCompile Include="moc_MainWindow.cpp" />
+    <ClCompile Include="moc_VideoWidget.cpp" />
+  </ItemGroup>
+  <!-- ============================================================ -->
+  <!-- 头文件列表 -->
+  <!-- ============================================================ -->
+  <ItemGroup>
+    <ClInclude Include="MediaInfo.h" />
+    <ClInclude Include="FrameQueue.h" />
+    <ClInclude Include="MediaDecoder.h" />
+    <ClInclude Include="AudioOutput.h" />
+    <ClInclude Include="VideoRenderer.h" />
+    <ClInclude Include="AudioVisualizer.h" />
+    <ClInclude Include="MediaTranscoder.h" />
+    <ClInclude Include="MediaDatabase.h" />
+    <ClInclude Include="PlayerController.h" />
+    <ClInclude Include="VideoWidget.h" />
+    <ClInclude Include="MainWindow.h" />
+  </ItemGroup>
+  <!-- ============================================================ -->
+  <!-- Qt MOC 预构建步骤 -->
+  <!-- 含Q_OBJECT宏的头文件必须由moc处理 -->
+  <!-- ============================================================ -->
+  <ItemDefinitionGroup>
+    <PreBuildEvent>
+      <Command>"E:\Qt\6.11.0\msvc2022_64\bin\moc.exe" "MainWindow.h" -o "moc_MainWindow.cpp" -DQT_OPENGLWIDGETS_LIB -I"E:\Qt\6.11.0\msvc2022_64\include" -I"E:\Qt\6.11.0\msvc2022_64\include\QtCore" -I"E:\Qt\6.11.0\msvc2022_64\include\QtGui" -I"E:\Qt\6.11.0\msvc2022_64\include\QtWidgets" -I"E:\Qt\6.11.0\msvc2022_64\include\QtOpenGL" -I"E:\Qt\6.11.0\msvc2022_64\include\QtOpenGLWidgets"
+"E:\Qt\6.11.0\msvc2022_64\bin\moc.exe" "VideoWidget.h" -o "moc_VideoWidget.cpp" -DQT_OPENGLWIDGETS_LIB -I"E:\Qt\6.11.0\msvc2022_64\include" -I"E:\Qt\6.11.0\msvc2022_64\include\QtCore" -I"E:\Qt\6.11.0\msvc2022_64\include\QtGui" -I"E:\Qt\6.11.0\msvc2022_64\include\QtWidgets" -I"E:\Qt\6.11.0\msvc2022_64\include\QtOpenGL" -I"E:\Qt\6.11.0\msvc2022_64\include\QtOpenGLWidgets"</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

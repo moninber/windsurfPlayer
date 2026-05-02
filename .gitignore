@@ -1,0 +1,45 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.cache
+*.ilk
+*.pdb
+*.obj
+*.pch
+ipch/
+*.VC.db
+*.VC.opendb
+Browse.VC.db
+
+# Build outputs
+x64/
+Debug/
+Release/
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Qt
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# IDE
+.vscode/
+.idea/
+
+# SQL Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+*.tlog
+
+# Temporary files
+*.tmp
+*.temp
+~$
