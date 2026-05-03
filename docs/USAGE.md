@@ -428,4 +428,6 @@ window.connectDatabase("127.0.0.1", "root", "your_password", "media_center");
 3. Visual Studio 配置是否正确
 4. FFmpeg/Qt/GLEW 版本是否匹配
 
-项目源码地址：（如有）
+项目源码地址：
+https:  https://github.com/moninber/windsurfPlayer.git
+ssh:   git@github.com:moninber/windsurfPlayer.git

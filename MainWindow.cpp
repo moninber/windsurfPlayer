@@ -85,27 +85,27 @@ void MainWindow::setupUI()
 void MainWindow::setupMenuBar()
 {
     // 文件菜单
-    QMenu* menu_file = menuBar()->addMenu("文件(&F)");
-    menu_file->addAction("打开文件(&O)", QKeySequence::Open, this, &MainWindow::openFile);
+    QMenu* menu_file = menuBar()->addMenu("文件");
+    menu_file->addAction("打开文件(&O)", QKeySequence(), this, &MainWindow::openFile);
     menu_file->addAction("添加到播放列表", this, &MainWindow::addToPlaylist);
     menu_file->addSeparator();
     menu_file->addAction("退出(Esc)", QKeySequence(Qt::Key_Escape), this, &QWidget::close);
 
     // 视图菜单
-    QMenu* menu_view = menuBar()->addMenu("视图(&V)");
+    QMenu* menu_view = menuBar()->addMenu("视图");
     menu_view->addAction(dock_playlist_->toggleViewAction());
     menu_view->addAction(dock_info_->toggleViewAction());
     menu_view->addSeparator();
-    menu_view->addAction("切换视频特效(&E)", QKeySequence("E"), this, &MainWindow::toggleEffect);
-    menu_view->addAction("切换频谱可视化(&V)", QKeySequence("V"), this, &MainWindow::toggleVisualizer);
+    menu_view->addAction("切换视频特效", this, &MainWindow::toggleEffect);
+    menu_view->addAction("切换频谱可视化", this, &MainWindow::toggleVisualizer);
 
     // 工具菜单
-    QMenu* menu_tools = menuBar()->addMenu("工具(&T)");
+    QMenu* menu_tools = menuBar()->addMenu("工具");
     menu_tools->addAction("连接数据库", this, &MainWindow::connectDatabaseDialog);
     menu_tools->addAction("格式转码", this, &MainWindow::transcodeDialog);
 
     // 帮助菜单
-    QMenu* menu_help = menuBar()->addMenu("帮助(&H)");
+    QMenu* menu_help = menuBar()->addMenu("帮助");
     menu_help->addAction("快捷键说明", this, [this]() {
         QMessageBox::information(this, "快捷键说明",
             "SPACE - 播放/暂停\n"

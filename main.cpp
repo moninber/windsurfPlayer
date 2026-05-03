@@ -51,11 +51,6 @@ int main(int argc, char* argv[])
     app.setApplicationVersion("1.0");
     app.setOrganizationName("MediaStudio");
 
-    std::cout << "============================================" << std::endl;
-    std::cout << "  MediaStudio - 音视频工作站 v1.0" << std::endl;
-    std::cout << "  FFmpeg + OpenGL + Qt + MySQL" << std::endl;
-    std::cout << "============================================\n" << std::endl;
-
     // --------------------------------------------------------
     // 创建主窗口
     // --------------------------------------------------------
@@ -75,8 +70,8 @@ int main(int argc, char* argv[])
 
     // --------------------------------------------------------
     // 可选：连接MySQL数据库
-  /*  * 取消注释并填入密码即可连接
-    * 首次使用前需运行 sql/init_database.sql*/
+    // 取消注释并填入密码即可连接
+    //首次使用前需运行 sql/init_database.sql
     // --------------------------------------------------------
     // window.connectDatabase("127.0.0.1", "root", "your_password", "media_center");
 
@@ -92,7 +87,5 @@ int main(int argc, char* argv[])
     // 清理
     // --------------------------------------------------------
     CoUninitialize();
-
-    std::cout << "\nMediaStudio 已退出" << std::endl;
     return result;
 }
