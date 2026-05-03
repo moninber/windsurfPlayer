@@ -19,7 +19,6 @@
 
 PlayerController::PlayerController()
     : video_widget_(nullptr)
-    , current_playlist_index_(0)
     , playing_(false)
     , paused_(false)
     , stop_requested_(false)
@@ -151,36 +150,6 @@ void PlayerController::togglePlayPause()
     else {
         play();
     }
-}
-
-// ============================================================
-// 播放列表控制
-// ============================================================
-void PlayerController::nextFile()
-{
-    if (playlist_.empty()) return;
-    current_playlist_index_ = (current_playlist_index_ + 1) % (int)playlist_.size();
-    loadFile(playlist_[current_playlist_index_]);
-    play();
-}
-
-void PlayerController::prevFile()
-{
-    if (playlist_.empty()) return;
-    current_playlist_index_ = (current_playlist_index_ - 1 + (int)playlist_.size()) % (int)playlist_.size();
-    loadFile(playlist_[current_playlist_index_]);
-    play();
-}
-
-void PlayerController::setPlaylist(const std::vector<std::string>& files)
-{
-    playlist_ = files;
-    current_playlist_index_ = 0;
-}
-
-void PlayerController::addToPlaylist(const std::string& file)
-{
-    playlist_.push_back(file);
 }
 
 // ============================================================

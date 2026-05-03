@@ -194,7 +194,6 @@ libmysql.lib;
   <!-- ============================================================ -->
   <ItemGroup>
     <ClInclude Include="MediaInfo.h" />
-    <ClInclude Include="FrameQueue.h" />
     <ClInclude Include="MediaDecoder.h" />
     <ClInclude Include="AudioOutput.h" />
     <ClInclude Include="VideoRenderer.h" />

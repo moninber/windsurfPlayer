@@ -58,6 +58,12 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     ++load_request_id_;
+    if (transcoding_.load()) {
+        transcoder_->cancel();
+    }
+    if (transcoding_thread_.joinable()) {
+        transcoding_thread_.join();
+    }
     player_->stop();
     delete player_;
     delete database_;
@@ -105,11 +111,12 @@ void MainWindow::setupMenuBar()
             "SPACE - 播放/暂停\n"
             "LEFT/RIGHT - 后退/前进5秒\n"
             "UP/DOWN - 音量增大/减小\n"
-            "N/P - 下一曲/上一曲\n"
+            "PAGEUP/PAGEDOWN - 上一曲/下一曲\n"
             "ESC - 退出程序\n"
             "E - 切换视频特效\n"
             "V - 切换频谱可视化\n"
             "1/2/3/4 - 播放速度 0.5x/1.0x/1.5x/2.0x\n"
+            "M - 静音/取消静音\n"
             "F - 切换收藏");
     });
     menu_help->addAction("关于", this, [this]() {
@@ -507,15 +514,32 @@ void MainWindow::setupShortcuts()
         slider_volume_->setValue(slider_volume_->value() - 5);
     });
 
-    // 下一个 (N)
-    QShortcut* sc_next = new QShortcut(QKeySequence(Qt::Key_N), this);
+    // 下一个 (PageDown)
+    QShortcut* sc_next = new QShortcut(QKeySequence(Qt::Key_PageDown), this);
     sc_next->setContext(Qt::ApplicationShortcut);
     connect(sc_next, &QShortcut::activated, this, &MainWindow::nextFile);
 
-    // 上一个 (P)
-    QShortcut* sc_prev = new QShortcut(QKeySequence(Qt::Key_P), this);
+    // 上一个 (PageUp)
+    QShortcut* sc_prev = new QShortcut(QKeySequence(Qt::Key_PageUp), this);
     sc_prev->setContext(Qt::ApplicationShortcut);
     connect(sc_prev, &QShortcut::activated, this, &MainWindow::prevFile);
+
+    // 倍速 (1-4)
+    QShortcut* sc_speed1 = new QShortcut(QKeySequence(Qt::Key_1), this);
+    sc_speed1->setContext(Qt::ApplicationShortcut);
+    connect(sc_speed1, &QShortcut::activated, this, [this]() { combo_speed_->setCurrentIndex(1); });
+
+    QShortcut* sc_speed2 = new QShortcut(QKeySequence(Qt::Key_2), this);
+    sc_speed2->setContext(Qt::ApplicationShortcut);
+    connect(sc_speed2, &QShortcut::activated, this, [this]() { combo_speed_->setCurrentIndex(3); });
+
+    QShortcut* sc_speed3 = new QShortcut(QKeySequence(Qt::Key_3), this);
+    sc_speed3->setContext(Qt::ApplicationShortcut);
+    connect(sc_speed3, &QShortcut::activated, this, [this]() { combo_speed_->setCurrentIndex(5); });
+
+    QShortcut* sc_speed4 = new QShortcut(QKeySequence(Qt::Key_4), this);
+    sc_speed4->setContext(Qt::ApplicationShortcut);
+    connect(sc_speed4, &QShortcut::activated, this, [this]() { combo_speed_->setCurrentIndex(6); });
 
     // 收藏 (F)
     QShortcut* sc_fav = new QShortcut(QKeySequence(Qt::Key_F), this);
@@ -533,6 +557,11 @@ void MainWindow::setupShortcuts()
             }
         }
     });
+
+    // 静音 (M)
+    QShortcut* sc_mute = new QShortcut(QKeySequence(Qt::Key_M), this);
+    sc_mute->setContext(Qt::ApplicationShortcut);
+    connect(sc_mute, &QShortcut::activated, this, &MainWindow::toggleMute);
 }
 
 // ============================================================
@@ -542,7 +571,7 @@ void MainWindow::openFile()
 {
     QString filename = QFileDialog::getOpenFileName(this,
         "打开媒体文件", "",
-        "媒体文件 (*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.mp3 *.wav *.flac *.aac);;所有文件 (*.*)");
+        "媒体文件 (*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.mp3 *.wav);;所有文件 (*.*)");
 
     if (filename.isEmpty()) return;
 
@@ -605,6 +634,10 @@ void MainWindow::seekPosition(int position)
 void MainWindow::changeVolume(int volume)
 {
     player_->setVolume(volume / 100.0f);
+    is_muted_ = (volume == 0);
+    if (!is_muted_) {
+        last_volume_ = volume;
+    }
     statusBar()->showMessage(QString("音量: %1%").arg(volume));
 }
 
@@ -649,10 +682,9 @@ void MainWindow::toggleEffect()
 
 void MainWindow::toggleVisualizer()
 {
-    static bool showing = false;
-    showing = !showing;
-    video_widget_->setShowSpectrum(showing);
     player_->toggleVisualizer();
+    bool showing = player_->isVisualizerShown();
+    video_widget_->setShowSpectrum(showing);
     statusBar()->showMessage(showing ? "频谱可视化模式" : "视频播放模式");
 }
 
@@ -688,6 +720,11 @@ void MainWindow::connectDatabaseDialog()
 
 void MainWindow::transcodeDialog()
 {
+    if (transcoding_.load()) {
+        QMessageBox::information(this, "提示", "已有转码任务正在执行，请稍候。");
+        return;
+    }
+
     QString input = QFileDialog::getOpenFileName(this, "选择源文件", "",
         "媒体文件 (*.mp4 *.mkv *.avi *.mov *.flv);;所有文件 (*.*)");
     if (input.isEmpty()) return;
@@ -696,27 +733,35 @@ void MainWindow::transcodeDialog()
         "MP4 (*.mp4);;MKV (*.mkv);;AVI (*.avi)");
     if (output.isEmpty()) return;
 
+    transcoding_ = true;
     statusBar()->showMessage("正在转码...");
-    bool success = transcoder_->transcode(
-        input.toStdString(), output.toStdString(),
-        0, 0, "libx264", "aac", 0,
-        [this](float progress) {
-            // 进度回调（在子线程中执行，使用QMetaObject安全更新UI）
-            QMetaObject::invokeMethod(this, [this, progress]() {
-                statusBar()->showMessage(QString("转码进度: %1%").arg((int)(progress * 100)));
-            }, Qt::QueuedConnection);
-        }
-    );
+    if (transcoding_thread_.joinable()) {
+        transcoding_thread_.join();
+    }
+    transcoding_thread_ = std::thread([this, input, output]() {
+        bool success = transcoder_->transcode(
+            input.toStdString(), output.toStdString(),
+            0, 0, "libx264", "aac", 0,
+            [this](float progress) {
+                QMetaObject::invokeMethod(this, [this, progress]() {
+                    statusBar()->showMessage(QString("转码进度: %1%").arg((int)(progress * 100)));
+                }, Qt::QueuedConnection);
+            }
+        );
 
-    if (success) {
-        statusBar()->showMessage("转码完成: " + output);
-        QMessageBox::information(this, "完成", "转码完成！");
-    }
-    else {
-        statusBar()->showMessage("转码失败");
-        QMessageBox::warning(this, "失败",
-            "转码失败:\n" + QString::fromStdString(transcoder_->getLastError()));
-    }
+        QMetaObject::invokeMethod(this, [this, success, output]() {
+            transcoding_ = false;
+            if (success) {
+                statusBar()->showMessage("转码完成: " + output);
+                QMessageBox::information(this, "完成", "转码完成！");
+            }
+            else {
+                statusBar()->showMessage("转码失败");
+                QMessageBox::warning(this, "失败",
+                    "转码失败:\n" + QString::fromStdString(transcoder_->getLastError()));
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::addToPlaylist()
@@ -749,14 +794,13 @@ void MainWindow::playlistItemDoubleClicked(QListWidgetItem* item)
 
     current_playlist_index_ = row;
     std::string path = playlist_[row];
-    requestLoadAndPlay(path, QFileInfo(QString::fromStdString(path)).fileName());
+    requestLoadAndPlay(path, item->text());
 }
 
 void MainWindow::updatePlaybackInfo()
 {
     if (!player_->isPlaying() && !player_->isPaused()) return;
 
-    // 更新进度条
     double current = player_->getCurrentTime();
     double duration = player_->getDuration();
 
@@ -804,6 +848,22 @@ void MainWindow::updatePlaybackInfo()
         }
 
         text_media_info_->setHtml(info_text);
+    }
+}
+
+void MainWindow::toggleMute()
+{
+    if (is_muted_) {
+        // 解除静音，恢复之前的音量
+        slider_volume_->setValue(last_volume_);
+        is_muted_ = false;
+        statusBar()->showMessage("解除静音", 2000);
+    } else {
+        // 静音，保存当前音量
+        last_volume_ = slider_volume_->value();
+        slider_volume_->setValue(0);
+        is_muted_ = true;
+        statusBar()->showMessage("静音", 2000);
     }
 }
 
@@ -923,19 +983,7 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         return;
     }
 
-    // 大多数其他快捷键已通过 setupShortcuts 处理
-    switch (event->key()) {
-    case Qt::Key_1:
-        combo_speed_->setCurrentIndex(1); break;  // 0.5x
-    case Qt::Key_2:
-        combo_speed_->setCurrentIndex(3); break;  // 1.0x
-    case Qt::Key_3:
-        combo_speed_->setCurrentIndex(5); break;  // 1.5x
-    case Qt::Key_4:
-        combo_speed_->setCurrentIndex(6); break;  // 2.0x
-    default:
-        QMainWindow::keyPressEvent(event);
-    }
+    QMainWindow::keyPressEvent(event);
 }
 
 // 拖放支持

@@ -13,12 +13,10 @@
 #pragma once
 
 #include <string>
-#include <vector>
 #include <memory>
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <condition_variable>
 
 #include "MediaInfo.h"
 #include "MediaDecoder.h"
@@ -59,18 +57,6 @@ public:
     /** @brief 切换视频特效 */
     void setEffect(VideoEffect effect);
 
-    /** @brief 下一曲 */
-    void nextFile();
-
-    /** @brief 上一曲 */
-    void prevFile();
-
-    /** @brief 设置播放列表 */
-    void setPlaylist(const std::vector<std::string>& files);
-
-    /** @brief 添加到播放列表 */
-    void addToPlaylist(const std::string& file);
-
     /** @brief 设置VideoWidget（用于帧数据传递） */
     void setVideoWidget(VideoWidget* widget) { video_widget_ = widget; }
 
@@ -84,8 +70,6 @@ public:
     VideoEffect getEffect() const { return current_effect_; }
     const MediaInfo& getMediaInfo() const { return media_info_; }
     void setMediaInfo(const MediaInfo& info) { media_info_ = info; }
-    int getPlaylistIndex() const { return current_playlist_index_; }
-    int getPlaylistSize() const { return (int)playlist_.size(); }
 
     /** @brief 切换播放/暂停 */
     void togglePlayPause();
@@ -105,10 +89,6 @@ private:
     std::unique_ptr<MediaDecoder> decoder_;
     std::unique_ptr<AudioOutput> audio_output_;
     VideoWidget* video_widget_;
-
-    // 播放列表
-    std::vector<std::string> playlist_;
-    int current_playlist_index_;
 
     // 原子状态变量（线程安全，无需加锁）
     std::atomic<bool> playing_;

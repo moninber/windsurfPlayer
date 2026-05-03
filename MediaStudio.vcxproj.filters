@@ -49,9 +49,6 @@
     <ClInclude Include="MediaInfo.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="FrameQueue.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="MediaDecoder.h">
       <Filter>头文件</Filter>
     </ClInclude>

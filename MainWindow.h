@@ -47,6 +47,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <thread>
 
 #include "VideoWidget.h"
 #include "PlayerController.h"
@@ -90,6 +91,7 @@ private slots:
     void removeFromPlaylist();
     void playlistItemDoubleClicked(QListWidgetItem* item);
     void updatePlaybackInfo();
+    void toggleMute();
 
 private:
     // UI构建函数
@@ -136,8 +138,12 @@ private:
     // 播放列表数据
     std::vector<std::string> playlist_;
     int current_playlist_index_;
+    int last_volume_ = 50;
+    bool is_muted_ = false;
     std::mutex load_mutex_;
     std::atomic<int> load_request_id_{ 0 };
+    std::atomic<bool> transcoding_{ false };
+    std::thread transcoding_thread_;
 
     // 数据库连接状态
     bool db_connected_;

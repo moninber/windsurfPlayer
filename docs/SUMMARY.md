@@ -127,7 +127,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - 原实现依赖 `keyPressEvent`，焦点在子控件时父窗口无法捕获按键。
 
 **修复内容**：
-- **MainWindow.cpp**：改用 `QShortcut` 替代 `keyPressEvent` 处理全局快捷键。
+- **MainWindow.cpp**：改用 `QShortcut` 统一处理播放、音量、上一首/下一首、静音和倍速快捷键。
 - 设置 `shortcut->setContext(Qt::ApplicationShortcut)` 使快捷键全局生效。
 - **VideoWidget.cpp**：设置 `setFocusPolicy(Qt::NoFocus)` 防止 OpenGL 控件抢占焦点。
 
@@ -138,10 +138,10 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 **根因**：
 - 原实现使用 X 键作为退出快捷键，不符合常见习惯。
 
-**修复内容**：
-- **MainWindow.cpp**：移除 X 键快捷键，添加 Esc 键快捷键。
-- 更新菜单帮助文本，将 "退出 (X)" 改为 "退出 (Esc)"。
-- 在 `keyPressEvent` 中添加 Esc 键处理：`if (event->key() == Qt::Key_Escape) close();`
+ **修复内容**：
+ - **MainWindow.cpp**：移除 X 键快捷键，添加 Esc 键快捷键。
+ - 更新菜单帮助文本，将 "退出 (X)" 改为 "退出 (Esc)"。
+ - 保留 `Esc` 作为兜底退出键，避免在特殊焦点状态下无法关闭窗口。
 
 ### 3.6 数据库连接异常（Debug 模式崩溃）
 
@@ -193,30 +193,57 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - **MediaDatabase.cpp**：移除重复的函数实现，确保每个方法只有一个实现。
 - 添加必要的 `#include` 指令和命名空间声明。
 
-### 3.9 当前已知问题与下一步方向
+### 3.9 转码工具崩溃与时长异常
+
+**症状**：
+- 设置好输入输出后，在 `MediaTranscoder.cpp` 中引发异常执行中断。
+- 转码生成后的文件时长不对（如 5s 变 47 分钟），画面声音异常。
+- AVI 转回 MP4 时没有画面。
+
+**根因**：
+- **音频 Planar 格式处理错误**：原代码错误地使用了 `av_samples_alloc` 和 `memcpy` 处理平面音频（如 FLTP），导致内存越界。
+- **时间戳 (PTS) 未缩放**：直接拷贝解码帧的 PTS，未根据输入输出流的 `time_base` 进行 `av_rescale_q` 转换。
+- **MP4 兼容性与上下文初始化**：MP4 对像素格式要求严格（需 YUV420P），且 AVI 头部信息不全导致 `sws_ctx` 过早初始化失败。
+
+**修复内容**：
+1. **音频重采样重构**：移除中间缓冲区，直接重采样到目标 `AVFrame` 的缓冲区，自动处理平面格式分配。
+2. **PTS 精确转换**：使用 `av_rescale_q` 在输入时间基和编码器时间基之间换算时间戳。
+3. **延迟初始化转换器**：在处理第一帧数据时根据实际格式动态创建 `sws_ctx` 和 `swr_ctx`。
+4. **提升兼容性**：强制视频编码器输出 `yuv420p` 格式，并增加解码器/编码器 Flush 逻辑，确保所有帧被写入。
+
+### 3.10 静音切换功能缺失
+
+**症状**：按 M 键无法实现静音/解除静音。
+
+**修复内容**：
+- **MainWindow.h/cpp**：新增 `toggleMute()` 槽函数，使用 `last_volume_` 保存静音前音量。
+- **快捷键绑定**：在 `setupShortcuts` 中添加 `Qt::Key_M` 绑定，实现一键静音恢复及状态栏提示。
+
+### 3.11 项目代码清理与优化
+
+**操作**：
+- **移除过时组件**：删除了已废弃的 `Application.cpp/h` (GLFW框架) 和 `FrameQueue.h` (早期设计)。
+- **同步工程配置**：清理了 `.vcxproj` 和 `.filters` 中的失效引用。
+- **修复逻辑中断**：修复了 `updatePlaybackInfo` 中因编辑错误导致的变量未定义和语法崩溃。
+
+### 3.12 当前已知问题与下一步方向
 
 | 问题 | 状态 | 下一步方向 |
 |------|------|-----------|
 | 倍速音频失音 | **已修复** | 持续测试 0.25x~4.0x 全范围 |
-| 倍速时间跳动 | **已修复** | 测试确认视频时钟优先逻辑稳定 |
-| 切换视频偶发卡顿 | **缓解，未根除** | 排查 `AudioOutput` 残留缓冲区、`AVCodecContext` flush、WASAPI 重新初始化 |
-| 快捷键失效 | **已修复** | 确认所有快捷键在全局上下文生效 |
-| Esc 退出 | **已修复** | 确认菜单文本已更新 |
-| 数据库同步 | **已修复** | 测试收藏功能和播放历史记录 |
-| F 键收藏 | **已修复** | 测试收藏状态切换和数据库更新 |
-| IntelliSense 错误 | **已修复** | 确认无残留报错 |
+| 倍速时间跳动 | **已修复** | 视频时钟优先逻辑已稳定 |
+| 转码器崩溃/异常 | **已修复** | 验证不同封装格式间的互转兼容性 |
+| 快捷键失效 | **已修复** | 全局上下文生效 |
+| 静音切换 | **已修复** | 状态栏及 UI 同步正常 |
+| 切换视频偶发卡顿 | **缓解，未根除** | 排查 `AudioOutput` 残留缓冲区、WASAPI 重新初始化 |
 
-## 四、关键代码变更位置
+## 四、代码量统计与项目规模
 
-| 文件 | 变更行范围 | 变更内容 |
-|------|-----------|---------|
-| `MainWindow.h` | 92-112 | 添加 `setupShortcuts` 方法声明 |
-| `MainWindow.cpp` | 14-34, 461-542, 825-875 | 实现 `setupShortcuts` 全局快捷键（Space, Esc, F, Up/Down）、数据库自动同步逻辑、F 键收藏切换 |
-| `VideoWidget.cpp` | 11-31 | 设置 `setFocusPolicy(Qt::NoFocus)` 防止抢占焦点 |
-| `PlayerController.h` | 76-96 | 添加 `setMediaInfo` 方法声明 |
-| `PlayerController.cpp` | 204-233 | 视频时钟优先逻辑（倍速时间跳动修复） |
-| `MediaDatabase.h` | 95-114 | 添加 `getMediaByPath` 方法声明 |
-| `MediaDatabase.cpp` | 18-93, 315-377, 590-630 | 使用 `ConnectOptionsMap` 连接、实现 `getMediaByPath`、清理重复实现、增强错误处理 |
+| 统计口径 | 数值 | 备注 |
+|---------|------|------|
+| 总代码行数 | **~3,839 行** | 不含注释/空行，排除 `glad.c` |
+| 核心模块 | ~2,500 行 | Decoder, Controller, Renderer |
+| UI 与业务 | ~1,000 行 | MainWindow, Database, Transcoder |
 
 ## 五、文件清单与阅读顺序建议
 
@@ -232,11 +259,9 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 8. AudioVisualizer.cpp/h → FFT 频谱可视化：Cooley-Tukey、频谱柱状图
 
 辅助模块：
-9.  MediaInfo.h           → 所有结构体定义（MediaInfo / VideoStreamInfo / AudioStreamInfo / VideoEffect）
-10. FrameQueue.h          → 线程安全模板队列（生产者-消费者），当前播放线程中未直接使用
-11. MediaDatabase.cpp/h   → MySQL 媒体库（可选功能）
-12. MediaTranscoder.cpp/h → FFmpeg 格式转码（可选功能）
-13. Application.cpp/h      → 旧 GLFW 版本主循环（已废弃，供参考）
+9.  MediaInfo.h           → 所有结构体定义
+10. MediaDatabase.cpp/h   → MySQL 媒体库（可选功能）
+11. MediaTranscoder.cpp/h → FFmpeg 格式转码（可选功能）
 ```
 
 ## 六、调试与测试建议

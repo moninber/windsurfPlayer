@@ -119,11 +119,27 @@ bool MediaTranscoder::transcode(
 
             video_enc_ctx->width = out_width;
             video_enc_ctx->height = out_height;
-            video_enc_ctx->time_base = av_inv_q(in_stream->r_frame_rate);
-            video_enc_ctx->framerate = in_stream->r_frame_rate;
-            // AVCodec::pix_fmts已废弃但仍可用，抑制废弃警告
+
+            // 修正 time_base 和 framerate 的获取
+            AVRational fps = av_guess_frame_rate(in_fmt_ctx, in_stream, nullptr);
+            if (fps.num <= 0 || fps.den <= 0) fps = AVRational{ 25, 1 };
+            video_enc_ctx->time_base = av_inv_q(fps);
+            video_enc_ctx->framerate = fps;
+
+            // 强制使用 YUV420P 以获得最佳 MP4 兼容性
+            video_enc_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+            // 检查编码器是否真的支持 YUV420P
 #pragma warning(disable: 4996)
-            video_enc_ctx->pix_fmt = enc_codec->pix_fmts ? enc_codec->pix_fmts[0] : AV_PIX_FMT_YUV420P;
+            if (enc_codec->pix_fmts) {
+                bool supported = false;
+                for (const enum AVPixelFormat* p = enc_codec->pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+                    if (*p == AV_PIX_FMT_YUV420P) {
+                        supported = true;
+                        break;
+                    }
+                }
+                if (!supported) video_enc_ctx->pix_fmt = enc_codec->pix_fmts[0];
+            }
 #pragma warning(default: 4996)
             video_enc_ctx->bit_rate = bitrate > 0 ? bitrate : video_dec_ctx->bit_rate;
 
@@ -150,11 +166,8 @@ bool MediaTranscoder::transcode(
             out_stream->time_base = video_enc_ctx->time_base;
             video_out_idx = out_stream->index;
 
-            // 创建缩放上下文
-            sws_ctx = sws_getContext(
-                video_dec_ctx->width, video_dec_ctx->height, video_dec_ctx->pix_fmt,
-                out_width, out_height, video_enc_ctx->pix_fmt,
-                SWS_BILINEAR, nullptr, nullptr, nullptr);
+            // sws_ctx 延迟到 processVideoStream 中根据实际帧格式初始化
+            sws_ctx = nullptr;
 
             std::cout << "[Transcoder] 视频转码: "
                       << video_dec_ctx->width << "x" << video_dec_ctx->height
@@ -249,15 +262,29 @@ bool MediaTranscoder::transcode(
         while (!cancelled_ && av_read_frame(in_fmt_ctx, packet) >= 0) {
             if (packet->stream_index == video_in_idx && video_dec_ctx && video_enc_ctx) {
                 processVideoStream(out_fmt_ctx, video_dec_ctx, video_enc_ctx,
-                    video_in_idx, video_out_idx, packet, frame, &sws_ctx,
+                    in_fmt_ctx->streams[video_in_idx]->time_base, video_out_idx, packet, frame, &sws_ctx,
                     total_duration, progress_cb);
             }
             else if (packet->stream_index == audio_in_idx && audio_dec_ctx && audio_enc_ctx) {
                 processAudioStream(out_fmt_ctx, audio_dec_ctx, audio_enc_ctx,
-                    audio_in_idx, audio_out_idx, packet, frame, &swr_ctx,
+                    in_fmt_ctx->streams[audio_in_idx]->time_base, audio_out_idx, packet, frame, &swr_ctx,
                     total_duration, progress_cb);
             }
             av_packet_unref(packet);
+        }
+
+        // 刷新解码器并处理剩余帧
+        if (video_dec_ctx && video_enc_ctx) {
+            avcodec_send_packet(video_dec_ctx, nullptr);
+            processVideoStream(out_fmt_ctx, video_dec_ctx, video_enc_ctx,
+                in_fmt_ctx->streams[video_in_idx]->time_base, video_out_idx, nullptr, frame, &sws_ctx,
+                total_duration, progress_cb);
+        }
+        if (audio_dec_ctx && audio_enc_ctx) {
+            avcodec_send_packet(audio_dec_ctx, nullptr);
+            processAudioStream(out_fmt_ctx, audio_dec_ctx, audio_enc_ctx,
+                in_fmt_ctx->streams[audio_in_idx]->time_base, audio_out_idx, nullptr, frame, &swr_ctx,
+                total_duration, progress_cb);
         }
 
         // 刷新编码器缓冲区
@@ -321,7 +348,7 @@ bool MediaTranscoder::processVideoStream(
     AVFormatContext* out_fmt_ctx,
     AVCodecContext* dec_ctx,
     AVCodecContext* enc_ctx,
-    int in_stream_idx,
+    AVRational in_time_base,
     int out_stream_idx,
     AVPacket* packet,
     AVFrame* frame,
@@ -335,27 +362,47 @@ bool MediaTranscoder::processVideoStream(
     while (avcodec_receive_frame(dec_ctx, frame) == 0) {
         // 报告进度
         if (progress_cb && total_duration > 0) {
-            double pts = frame->pts * av_q2d(dec_ctx->framerate) /
-                (dec_ctx->time_base.den / (double)dec_ctx->time_base.num);
-            float progress = std::min(1.0f, (float)(frame->pts * av_q2d(
-                out_fmt_ctx->streams[in_stream_idx]->time_base) / (total_duration / AV_TIME_BASE)));
+            float progress = std::min(1.0f, (float)(frame->pts * av_q2d(in_time_base) / (total_duration / AV_TIME_BASE)));
             progress_cb(progress);
+        }
+
+        // 延迟初始化或检查 sws_ctx 状态
+        if (!*sws_ctx) {
+            *sws_ctx = sws_getContext(
+                frame->width, frame->height, (AVPixelFormat)frame->format,
+                enc_ctx->width, enc_ctx->height, enc_ctx->pix_fmt,
+                SWS_BILINEAR, nullptr, nullptr, nullptr);
         }
 
         // 缩放视频帧
         AVFrame* out_frame = av_frame_alloc();
+        if (!out_frame) continue;
+        
         out_frame->format = enc_ctx->pix_fmt;
         out_frame->width = enc_ctx->width;
         out_frame->height = enc_ctx->height;
-        av_frame_get_buffer(out_frame, 0);
+        
+        if (av_frame_get_buffer(out_frame, 0) < 0) {
+            av_frame_free(&out_frame);
+            continue;
+        }
 
         if (*sws_ctx) {
             sws_scale(*sws_ctx,
                 frame->data, frame->linesize, 0, frame->height,
                 out_frame->data, out_frame->linesize);
+        } else {
+            // 如果仍然没有上下文，说明格式转换有问题
+            av_frame_free(&out_frame);
+            continue;
         }
 
-        out_frame->pts = frame->pts;
+        // 处理 PTS
+        int64_t pts = frame->pts;
+        if (pts == AV_NOPTS_VALUE) pts = frame->pkt_dts;
+        if (pts == AV_NOPTS_VALUE) pts = 0; // 兜底处理
+
+        out_frame->pts = av_rescale_q(pts, in_time_base, enc_ctx->time_base);
 
         // 编码
         ret = avcodec_send_frame(enc_ctx, out_frame);
@@ -385,7 +432,7 @@ bool MediaTranscoder::processAudioStream(
     AVFormatContext* out_fmt_ctx,
     AVCodecContext* dec_ctx,
     AVCodecContext* enc_ctx,
-    int in_stream_idx,
+    AVRational in_time_base,
     int out_stream_idx,
     AVPacket* packet,
     AVFrame* frame,
@@ -397,35 +444,48 @@ bool MediaTranscoder::processAudioStream(
     if (ret < 0) return true;
 
     while (avcodec_receive_frame(dec_ctx, frame) == 0) {
-        if (*swr_ctx) {
-            // 重采样音频帧
-            uint8_t* out_buf = nullptr;
+        if (*swr_ctx || (frame->format != enc_ctx->sample_fmt || frame->sample_rate != enc_ctx->sample_rate)) {
+            // 延迟初始化或检查 swr_ctx 状态
+            if (!*swr_ctx) {
+                swr_alloc_set_opts2(swr_ctx,
+                    &enc_ctx->ch_layout, enc_ctx->sample_fmt, enc_ctx->sample_rate,
+                    &frame->ch_layout, (AVSampleFormat)frame->format, frame->sample_rate,
+                    0, nullptr);
+                if (*swr_ctx) swr_init(*swr_ctx);
+            }
+
+            // 1. 估算输出样本数
             int out_samples = (int)av_rescale_rnd(
                 swr_get_delay(*swr_ctx, frame->sample_rate) + frame->nb_samples,
                 enc_ctx->sample_rate, frame->sample_rate, AV_ROUND_UP);
 
-            av_samples_alloc(&out_buf, nullptr, enc_ctx->ch_layout.nb_channels,
-                out_samples, enc_ctx->sample_fmt, 0);
+            // 2. 创建输出帧并分配缓冲区
+            AVFrame* out_frame = av_frame_alloc();
+            out_frame->format = enc_ctx->sample_fmt;
+            av_channel_layout_copy(&out_frame->ch_layout, &enc_ctx->ch_layout);
+            out_frame->sample_rate = enc_ctx->sample_rate;
+            out_frame->nb_samples = out_samples;
+            
+            if (av_frame_get_buffer(out_frame, 0) < 0) {
+                av_frame_free(&out_frame);
+                av_frame_unref(frame);
+                continue;
+            }
 
-            int converted = swr_convert(*swr_ctx, &out_buf, out_samples,
+            // 3. 重采样直接到输出帧缓冲区
+            int converted = swr_convert(*swr_ctx, out_frame->data, out_samples,
                 (const uint8_t**)frame->data, frame->nb_samples);
 
             if (converted > 0) {
-                AVFrame* out_frame = av_frame_alloc();
-                out_frame->format = enc_ctx->sample_fmt;
-                av_channel_layout_copy(&out_frame->ch_layout, &enc_ctx->ch_layout);
-                out_frame->sample_rate = enc_ctx->sample_rate;
                 out_frame->nb_samples = converted;
-                av_frame_get_buffer(out_frame, 0);
+                
+                int64_t pts = frame->pts;
+                if (pts == AV_NOPTS_VALUE) pts = frame->pkt_dts;
+                if (pts == AV_NOPTS_VALUE) pts = 0;
 
-                // 拷贝重采样后的数据
-                memcpy(out_frame->data[0], out_buf,
-                    converted * enc_ctx->ch_layout.nb_channels * av_get_bytes_per_sample(enc_ctx->sample_fmt));
-                out_frame->pts = frame->pts;
+                out_frame->pts = av_rescale_q(pts, in_time_base, enc_ctx->time_base);
 
                 ret = avcodec_send_frame(enc_ctx, out_frame);
-                av_frame_free(&out_frame);
-
                 if (ret >= 0) {
                     AVPacket* enc_pkt = av_packet_alloc();
                     while (avcodec_receive_packet(enc_ctx, enc_pkt) == 0) {
@@ -438,7 +498,7 @@ bool MediaTranscoder::processAudioStream(
                     av_packet_free(&enc_pkt);
                 }
             }
-            av_freep(&out_buf);
+            av_frame_free(&out_frame);
         }
 
         av_frame_unref(frame);

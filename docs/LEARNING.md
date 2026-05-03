@@ -127,17 +127,15 @@ PlayerController (状态管理)
 | **视频渲染** | `VideoRenderer.h/.cpp` | OpenGL 渲染 | 着色器编译、纹理上传、`glTexSubImage2D`、7 种 GLSL 特效 | OpenGL, GLSL |
 | **音频可视化** | `AudioVisualizer.h/.cpp` | FFT 频谱 | `fft()` Cooley-Tukey 实现、窗函数、分贝归一化 | 数字信号处理 |
 | **数据结构** | `MediaInfo.h` | 结构定义 | `MediaInfo`、`VideoStreamInfo`、`AudioStreamInfo`、`VideoEffect` 枚举、`db_id`、`is_favorite` | C++ 结构体 |
-| **线程队列** | `FrameQueue.h` | 线程安全队列 | `std::mutex` + `std::condition_variable` 生产者-消费者模板 | C++ 并发 |
 | **数据库** | `MediaDatabase.h/.cpp` | MySQL 媒体库 | `PreparedStatement`、`getMediaByPath`、CRUD 操作、播放历史记录 | MySQL Connector/C++ |
-| **转码器** | `MediaTranscoder.h/.cpp` | 格式转码 | FFmpeg 编码 API 完整链路 | FFmpeg 编码 |
-| **旧版本** | `Application.h/.cpp` | GLFW 版本 | 已废弃，对比学习 GLFW 与 Qt 差异 | GLFW |
+| **转码器** | `MediaTranscoder.h/.cpp` | 格式转码 | FFmpeg 编码 API 完整链路、PTS 换算、YUV420P 兼容性 | FFmpeg 编码 |
 
 ### 2.2 架构理解口诀
 
 - **一条主线**：`MainWindow` 收到用户操作 → 调用 `PlayerController` → `MediaDecoder` 解码 → `AudioOutput` 播放音频 + `VideoWidget` 显示视频
 - **两个线程**：Qt 主线程（GUI + OpenGL）+ `playbackThread`（解码 + 音频输出 + 帧推送）
 - **三道关卡**：`load_request_id_`（UI 层去重）→ `lifecycle_mutex_`（控制器层互斥）→ `session_id_`（播放线程层会话隔离）
-- **四个同步**：原子变量（标志位）、互斥锁（临界区）、递归锁（生命周期）、条件变量（生产者-消费者）
+- **四个同步**：原子变量（标志位）、互斥锁（临界区）、递归锁（生命周期）、Qt 队列调用（跨线程 UI 更新）
 - **五个关键**：视频时钟优先、全局快捷键、数据库自动同步、焦点策略、Debug/Release 二进制兼容
 
 ---
@@ -685,7 +683,7 @@ mysql -u root -p < sql/init_database.sql
 编辑 `main.cpp`，取消以下行的注释：
 
 ```cpp
-app.connectDatabase("127.0.0.1", "root", "你的密码", "media_center");
+window.connectDatabase("127.0.0.1", "root", "你的密码", "media_center");
 ```
 
 ---
@@ -763,7 +761,6 @@ bool PlayerController::loadFile(const std::string& filename) {
 | `std::atomic<bool/int>` | 简单标志位，无需复杂同步 | `playing_`, `paused_`, `session_id_` | 适合读多写少，无需锁开销 |
 | `std::mutex` | 临界区保护 | `seek_mutex_`, `load_mutex_` | 注意死锁，尽量缩小锁范围 |
 | `std::recursive_mutex` | 同线程需要重复加锁 | `lifecycle_mutex_` | 性能略低于普通 mutex，仅在必须时使用 |
-| `std::condition_variable` | 生产者-消费者等待通知 | `FrameQueue` 中的 `not_empty_` / `not_full_` | 必须与 `std::unique_lock` 配合使用 |
 | `QMetaObject::invokeMethod` | 跨线程更新 Qt GUI | `MainWindow` 中的状态栏/按钮更新 | 必须指定 `Qt::QueuedConnection` |
 
 ---
@@ -776,7 +773,18 @@ bool PlayerController::loadFile(const std::string& filename) {
 源文件 → 解封装 → 解码 → 原始帧 → 缩放/重采样 → 编码 → 封装 → 目标文件
 ```
 
-### 9.2 使用示例
+### 9.2 转码核心优化 (PTS 换算与兼容性)
+
+**1. 时间戳 (PTS) 正确换算**
+```cpp
+// 核心逻辑：使用 av_rescale_q 进行输入时间基到编码器时间基的转换
+out_frame->pts = av_rescale_q(frame->pts, in_time_base, enc_ctx->time_base);
+```
+
+**2. MP4/移动端最大兼容性**
+强制视频编码器输出 `YUV420P` 格式，并延迟初始化 `sws_ctx` 到接收首帧时，确保转码生成的 MP4 在所有平台均可正常播放。
+
+### 9.3 使用示例
 
 ```cpp
 MediaTranscoder transcoder;
@@ -793,7 +801,7 @@ transcoder.transcode(
 );
 ```
 
-### 9.3 编码参数说明
+### 9.4 编码参数说明
 
 - **preset**：编码速度 vs 压缩率权衡（ultrafast→slow）
 - **CRF**：恒定质量因子（0=无损，18=高质量，28=中等，51=最差）
@@ -909,7 +917,7 @@ Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, Qt6OpenGLWidgets.dll                   
 
 | 模式 | 本项目应用 | 解决的问题 |
 |------|-----------|-----------|
-| 生产者-消费者 | `FrameQueue` | 解码线程与渲染线程速度不匹配 |
+| 请求去重 | `load_request_id_` + `requestLoadAndPlay()` | 连续切换媒体时避免旧加载结果覆盖新请求 |
 | 单例 | `sql::mysql::get_mysql_driver_instance()` | MySQL 驱动全局唯一 |
 | 状态机 | `PlayerController` (playing/paused/stopped) | 播放生命周期管理 |
 | 命令队列 | `MainWindow::requestLoadAndPlay()` | 异步操作序列化、去重 |
