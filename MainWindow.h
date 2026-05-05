@@ -122,6 +122,7 @@ private:
     QPushButton* btn_stop_;
     QPushButton* btn_prev_;
     QPushButton* btn_next_;
+    QPushButton* btn_mute_;
     QSlider* slider_progress_;
     QSlider* slider_volume_;
     QLabel* label_time_;

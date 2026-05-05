@@ -179,7 +179,14 @@ void MainWindow::setupToolBar()
     toolbar->addSeparator();
 
     // 音量控制
-    toolbar->addWidget(new QLabel(" 🔊"));
+    btn_mute_ = new QPushButton("🔊");
+    btn_mute_->setToolTip("静音/取消静音 (M)");
+    btn_mute_->setCheckable(true);
+    btn_mute_->setMinimumHeight(32);
+    btn_mute_->setMaximumWidth(40);
+    btn_mute_->setObjectName("btn_mute");
+    toolbar->addWidget(btn_mute_);
+
     slider_volume_ = new QSlider(Qt::Horizontal);
     slider_volume_->setRange(0, 100);
     slider_volume_->setValue(100);
@@ -350,6 +357,10 @@ void MainWindow::applyDarkTheme()
         QPushButton:pressed {
             background-color: #585b70;
         }
+        QPushButton#btn_mute:checked {
+            background-color: #f38ba8;
+            color: #11111b;
+        }
         QSlider::groove:horizontal {
             background: #313244;
             height: 6px;
@@ -464,6 +475,7 @@ void MainWindow::connectSignals()
     QObject::connect(btn_stop_, &QPushButton::clicked, this, &MainWindow::stopPlayback);
     QObject::connect(btn_prev_, &QPushButton::clicked, this, &MainWindow::prevFile);
     QObject::connect(btn_next_, &QPushButton::clicked, this, &MainWindow::nextFile);
+    QObject::connect(btn_mute_, &QPushButton::clicked, this, &MainWindow::toggleMute);
 
     // 进度条
     QObject::connect(slider_progress_, &QSlider::sliderMoved, this, &MainWindow::seekPosition);
@@ -638,6 +650,13 @@ void MainWindow::changeVolume(int volume)
     if (!is_muted_) {
         last_volume_ = volume;
     }
+    
+    // 同步更新静音按钮状态
+    btn_mute_->blockSignals(true);
+    btn_mute_->setChecked(is_muted_);
+    btn_mute_->setText(is_muted_ ? "🔇" : "🔊");
+    btn_mute_->blockSignals(false);
+
     statusBar()->showMessage(QString("音量: %1%").arg(volume));
 }
 
@@ -857,12 +876,16 @@ void MainWindow::toggleMute()
         // 解除静音，恢复之前的音量
         slider_volume_->setValue(last_volume_);
         is_muted_ = false;
+        btn_mute_->setChecked(false);
+        btn_mute_->setText("🔊");
         statusBar()->showMessage("解除静音", 2000);
     } else {
         // 静音，保存当前音量
         last_volume_ = slider_volume_->value();
         slider_volume_->setValue(0);
         is_muted_ = true;
+        btn_mute_->setChecked(true);
+        btn_mute_->setText("🔇");
         statusBar()->showMessage("静音", 2000);
     }
 }
