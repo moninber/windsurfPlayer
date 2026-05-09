@@ -87,8 +87,7 @@ void PlayerController::play()
     playing_ = true;
     paused_ = false;
     stop_requested_ = false;
-    int sid = ++session_id_;   // 新session，旧线程会因sid不匹配而退出
-    (void)sid;
+    ++session_id_;   // 新session，旧线程会因sid不匹配而退出
 
     // 启动单播放线程
     playback_thread_ = std::thread(&PlayerController::playbackThread, this);
@@ -213,6 +212,7 @@ void PlayerController::playbackThread()
             std::lock_guard<std::mutex> lock(seek_mutex_);
             double seek_seconds = pending_seek_seconds_.load();
             decoder_->seek(seek_seconds);
+            //暂停是为了清空音频缓冲区，等待新数据就位，下次循环就会执行resume来播放
             if (audio_ready) {
                 audio_output_->pause();
                 audio_paused = true;

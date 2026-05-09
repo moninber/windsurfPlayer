@@ -599,7 +599,7 @@ void MainWindow::openFile()
     requestLoadAndPlay(file_path, QFileInfo(filename).fileName());
 }
 
-void MainWindow::togglePlayPause()
+void MainWindow::togglePlayPause()//暂停
 {
     if (!player_->isPlaying() && !player_->isPaused()) {
         if (playlist_.empty()) {
@@ -624,7 +624,7 @@ void MainWindow::togglePlayPause()
     }
 }
 
-void MainWindow::stopPlayback()
+void MainWindow::stopPlayback()//停止
 {
     player_->stopAsync();
     btn_play_->setText("▶");
