@@ -157,8 +157,7 @@ void MainWindow::setupToolBar()
     // 播放/暂停
     btn_play_ = new QPushButton("▶");
     btn_play_->setToolTip("播放/暂停 (Space)");
-    btn_play_->setMinimumHeight(32);
-    btn_play_->setMaximumWidth(50);
+    btn_play_->setFixedSize(50, 32);
     btn_play_->setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; }");
     toolbar->addWidget(btn_play_);
 

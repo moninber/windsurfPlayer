@@ -12,6 +12,48 @@
 #include <sstream>
 #include <thread>
 
+// 外部调用者（PlayerController）
+// │
+// ├── open(filename)
+// │   ├── avformat_open_input()       打开文件
+// │   ├── avformat_find_stream_info() 探测流
+// │   ├── avcodec_find_decoder()      查找解码器
+// │   ├── avcodec_open2()             打开解码器
+// │   └── extractMediaInfo()          填充 media_info_
+// │
+// ├── setPlaybackSpeed(speed)
+// │   ├── destroyAudioFilterGraph()   销毁旧滤镜图
+// │   ├── buildAtempoFilterChain()    构造 atempo 滤镜字符串
+// │   │   └── 返回 "atempo=2.0" 等字符串
+// │   └── initAudioFilterGraph()      重建滤镜图（变速不变调）
+// │
+// ├── seek(seconds)
+// │   ├── av_seek_frame()             跳转到关键帧
+// │   ├── avcodec_flush_buffers()     清空解码器缓冲
+// │   └── 重置 eof/flush 状态标志
+// │
+// ├── decodeNextFrame(out_frame)      ← 每次循环调用一次
+// │   ├── [未EOF] av_read_frame()     读取压缩 packet
+// │   │   ├── [视频packet]
+// │   │   │   └── avcodec_send_packet() → avcodec_receive_frame()
+// │   │   │       └── convertVideoFrame()
+// │   │   │           ├── sws_scale()         YUV → RGB24
+// │   │   │           └── getFrameTimestampSeconds() 计算PTS(秒)
+// │   │   └── [音频packet]
+// │   │       └── avcodec_send_packet() → av_buffersrc_add_frame()
+// │   │           └── pullAudioFilterFrame()
+// │   │               ├── av_buffersink_get_frame() 从滤镜图取帧
+// │   │               └── convertAudioFrame()
+// │   │                   ├── swr_convert()   重采样→S16LE 44100Hz
+// │   │                   └── getFrameTimestampSeconds()
+// │   └── [EOF] 发送 flush packet → 排干解码器残留帧
+// │
+// └── close()
+//     ├── destroyAudioFilterGraph()
+//     ├── avcodec_free_context()      释放视频/音频解码器
+//     ├── sws_freeContext()
+//     ├── swr_free()
+//     └── avformat_close_input()
 
 // ============================================================
 // 构造函数：初始化所有指针为nullptr
