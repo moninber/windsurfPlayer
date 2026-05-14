@@ -31,6 +31,12 @@
 #include <memory>
 #include "MediaInfo.h"
 
+#ifndef MEDIASTUDIO_ENABLE_MYSQL
+#define MEDIASTUDIO_ENABLE_MYSQL 1
+#endif
+
+#if MEDIASTUDIO_ENABLE_MYSQL
+
 // MySQL Connector/C++ 头文件
 // 包含路径需要配置到项目属性中
 #include <mysql_driver.h>
@@ -170,3 +176,39 @@ private:
     std::string last_error_;                // 最后错误信息
     std::string database_name_;             // 当前数据库名
 };
+
+#else
+
+class MediaDatabase {
+public:
+    MediaDatabase() = default;
+    ~MediaDatabase() = default;
+
+    bool connect(const std::string&, const std::string&,
+                 const std::string&, const std::string&, int = 3306)
+    {
+        last_error_ = "数据库功能未启用";
+        return false;
+    }
+
+    void disconnect() {}
+    bool isConnected() const { return false; }
+    bool initTables() { return false; }
+    int addMedia(const MediaInfo&) { return -1; }
+    bool updateMedia(int, const MediaInfo&) { return false; }
+    bool deleteMedia(int) { return false; }
+    bool getMediaById(int, MediaInfo&) { return false; }
+    bool getMediaByPath(const std::string&, MediaInfo&) { return false; }
+    bool getAllMedia(std::vector<MediaInfo>&) { return false; }
+    bool searchMedia(const std::string&, std::vector<MediaInfo>&) { return false; }
+    bool recordPlayHistory(int) { return false; }
+    bool setFavorite(int, bool) { return false; }
+    bool getFavorites(std::vector<MediaInfo>&) { return false; }
+    bool getRecentPlayed(std::vector<MediaInfo>&, int = 20) { return false; }
+    const std::string& getLastError() const { return last_error_; }
+
+private:
+    std::string last_error_ = "数据库功能未启用";
+};
+
+#endif

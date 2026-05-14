@@ -75,6 +75,10 @@ void VideoWidget::paintGL()
 {
     if (!gl_initialized_) return;
 
+    const qreal dpr = devicePixelRatioF();
+    const int viewport_width = static_cast<int>(width() * dpr);
+    const int viewport_height = static_cast<int>(height() * dpr);
+
     if (show_spectrum_) {
         // 频谱可视化模式
         glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
@@ -82,7 +86,7 @@ void VideoWidget::paintGL()
 
         std::lock_guard<std::mutex> lock(spectrum_mutex_);
         if (visualizer_ && (!spectrum_data_.empty() || has_new_spectrum_)) {
-            visualizer_->render(width(), height());
+            visualizer_->render(viewport_width, viewport_height);
             has_new_spectrum_ = false;
         }
     }
@@ -93,7 +97,7 @@ void VideoWidget::paintGL()
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (!frame_data_.empty()) {
-            renderer_->setViewport(0, 0, width(), height());
+            renderer_->setViewport(0, 0, viewport_width, viewport_height);
             renderer_->render(frame_data_.data(), frame_width_, frame_height_);
             has_new_frame_ = false;
         }

@@ -1,0 +1,51 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mingw-release",
+      "displayName": "MinGW Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mingw-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MAKE_PROGRAM": "E:/Qt/Tools/Ninja/ninja.exe",
+        "CMAKE_C_COMPILER": "E:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "E:/Qt/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_PREFIX_PATH": "E:/Qt/6.11.0/mingw_64",
+        "MEDIASTUDIO_QT_ROOT": "E:/Qt/6.11.0/mingw_64",
+        "MEDIASTUDIO_FFMPEG_ROOT": "E:/ffmpeg",
+        "MEDIASTUDIO_GLEW_ROOT": "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1",
+        "MEDIASTUDIO_ENABLE_MYSQL": "OFF",
+        "MEDIASTUDIO_DEPLOY_RUNTIME": "ON"
+      }
+    },
+    {
+      "name": "mingw-debug",
+      "displayName": "MinGW Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mingw-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MAKE_PROGRAM": "E:/Qt/Tools/Ninja/ninja.exe",
+        "CMAKE_C_COMPILER": "E:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "E:/Qt/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_PREFIX_PATH": "E:/Qt/6.11.0/mingw_64",
+        "MEDIASTUDIO_QT_ROOT": "E:/Qt/6.11.0/mingw_64",
+        "MEDIASTUDIO_FFMPEG_ROOT": "E:/ffmpeg",
+        "MEDIASTUDIO_GLEW_ROOT": "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1",
+        "MEDIASTUDIO_ENABLE_MYSQL": "OFF",
+        "MEDIASTUDIO_DEPLOY_RUNTIME": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mingw-release",
+      "configurePreset": "mingw-release"
+    },
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug"
+    }
+  ]
+}
