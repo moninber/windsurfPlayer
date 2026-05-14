@@ -573,6 +573,16 @@ void MainWindow::setupShortcuts()
     QShortcut* sc_mute = new QShortcut(QKeySequence(Qt::Key_M), this);
     sc_mute->setContext(Qt::ApplicationShortcut);
     connect(sc_mute, &QShortcut::activated, this, &MainWindow::toggleMute);
+
+    // 切换视频特效 (E)
+    QShortcut* sc_effect = new QShortcut(QKeySequence(Qt::Key_E), this);
+    sc_effect->setContext(Qt::ApplicationShortcut);
+    connect(sc_effect, &QShortcut::activated, this, &MainWindow::toggleEffect);
+
+    // 切换频谱可视化 (V)
+    QShortcut* sc_viz = new QShortcut(QKeySequence(Qt::Key_V), this);
+    sc_viz->setContext(Qt::ApplicationShortcut);
+    connect(sc_viz, &QShortcut::activated, this, &MainWindow::toggleVisualizer);
 }
 
 // ============================================================

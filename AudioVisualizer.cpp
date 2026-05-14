@@ -176,11 +176,13 @@ void AudioVisualizer::cleanup()
 void AudioVisualizer::setSpectrumData(const std::vector<float>& spectrum_data)
 {
     int count = std::min(bar_count_, (int)spectrum_data.size());
+    //保留七成smoothed_data_[i]，加入新数据的三成
     for (int i = 0; i < count; i++) {
         float value = std::max(0.0f, std::min(1.0f, spectrum_data[i]));
         spectrum_data_[i] = value;
         smoothed_data_[i] = 0.3f * value + 0.7f * smoothed_data_[i];
     }
+    //剩余的柱状图数据衰减
     for (int i = count; i < bar_count_; i++) {
         spectrum_data_[i] = 0.0f;
         smoothed_data_[i] *= 0.7f;
@@ -204,7 +206,7 @@ void AudioVisualizer::fft(std::vector<std::complex<double>>& data)
     for (int i = 1, j = 0; i < N; i++) {
         int bit = N >> 1;
         for (; j & bit; bit >>= 1) {
-            j ^= bit;
+            j ^= bit;//这里的^是异或运算符
         }
         j ^= bit;
         if (i < j) {

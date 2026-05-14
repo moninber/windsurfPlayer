@@ -96,7 +96,7 @@ private:
     std::atomic<float> volume_;                // 音量
     std::atomic<bool> playing_;                // 是否正在播放
     bool com_initialized_;                     // 是否由本对象初始化了COM
-    UINT32 buffer_frame_count_;               // WASAPI缓冲区帧数（play()中限速用）
+    UINT32 buffer_frame_count_;                // WASAPI缓冲区帧数（play()中限速用）
     std::mutex mutex_;                         // 互斥锁（保护WASAPI调用）
 
     HANDLE audio_event_;                       // 音频事件句柄（用于缓冲区通知）
