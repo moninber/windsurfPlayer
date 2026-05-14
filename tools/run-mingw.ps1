@@ -15,7 +15,8 @@ $RuntimePaths = @(
     "E:\Qt\Tools\mingw1310_64\bin",
     "E:\Qt\6.11.0\mingw_64\bin",
     "E:\ffmpeg\bin",
-    "E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\bin\Release\x64"
+    "E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\bin\Release\x64",
+    (Join-Path $ProjectRoot "third_party\mariadb\mingw64\bin")
 )
 
 $ExistingRuntimePaths = $RuntimePaths | Where-Object { Test-Path $_ }

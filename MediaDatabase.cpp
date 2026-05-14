@@ -4,11 +4,96 @@
  */
 
 #include "MediaDatabase.h"
+#include <cstdlib>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
+
+namespace {
+std::string mysqlError(MYSQL* connection)
+{
+    if (!connection) return "数据库连接为空";
+    return mysql_error(connection);
+}
+
+std::string quote(MYSQL* connection, const std::string& value)
+{
+    std::string escaped(value.size() * 2 + 1, '\0');
+    unsigned long length = mysql_real_escape_string(
+        connection,
+        escaped.data(),
+        value.c_str(),
+        static_cast<unsigned long>(value.size())
+    );
+    escaped.resize(length);
+    return "'" + escaped + "'";
+}
+
+std::string number(double value)
+{
+    std::ostringstream out;
+    out << std::setprecision(17) << value;
+    return out.str();
+}
+
+bool execute(MYSQL* connection, const std::string& sql, std::string& last_error, const std::string& prefix)
+{
+    if (!connection) {
+        last_error = "未连接数据库";
+        return false;
+    }
+
+    if (mysql_query(connection, sql.c_str()) != 0) {
+        last_error = prefix + ": " + mysqlError(connection);
+        return false;
+    }
+
+    return true;
+}
+
+MYSQL_RES* query(MYSQL* connection, const std::string& sql, std::string& last_error, const std::string& prefix)
+{
+    if (!execute(connection, sql, last_error, prefix)) {
+        return nullptr;
+    }
+
+    MYSQL_RES* result = mysql_store_result(connection);
+    if (!result && mysql_errno(connection) != 0) {
+        last_error = prefix + ": " + mysqlError(connection);
+        return nullptr;
+    }
+
+    return result;
+}
+
+std::string field(MYSQL_ROW row, unsigned long* lengths, unsigned int index)
+{
+    if (!row || !row[index]) return "";
+    return std::string(row[index], lengths[index]);
+}
+
+int toInt(MYSQL_ROW row, unsigned int index)
+{
+    if (!row || !row[index]) return 0;
+    return std::atoi(row[index]);
+}
+
+long long toInt64(MYSQL_ROW row, unsigned int index)
+{
+    if (!row || !row[index]) return 0;
+    return std::strtoll(row[index], nullptr, 10);
+}
+
+double toDouble(MYSQL_ROW row, unsigned int index)
+{
+    if (!row || !row[index]) return 0.0;
+    return std::strtod(row[index], nullptr);
+}
+}
 
 MediaDatabase::MediaDatabase()
-    : driver_(nullptr)
-    , connection_(nullptr)
+    : connection_(nullptr)
 {
 }
 
@@ -24,76 +109,54 @@ bool MediaDatabase::connect(const std::string& host, const std::string& user,
                              const std::string& password, const std::string& database,
                              int port)
 {
-    try {
-        std::cout << "[Database] 正在尝试获取驱动实例..." << std::endl;
-        driver_ = sql::mysql::get_mysql_driver_instance();
+    disconnect();
 
-        if (!driver_) {
-            last_error_ = "无法获取 MySQL 驱动实例";
-            return false;
-        }
-
-        // 构建连接参数映射，这种方式有时比直接传递字符串更稳定
-        sql::ConnectOptionsMap connection_options;
-        connection_options["hostName"] = host;
-        connection_options["userName"] = user;
-        connection_options["password"] = password;
-        connection_options["schema"]   = database;
-        connection_options["port"]     = port;
-        connection_options["OPT_RECONNECT"] = true;
-
-        std::string url = "tcp://" + host + ":" + std::to_string(port);
-        std::cout << "[Database] 准备连接到: " << url << std::endl;
-
-        // 建立连接
-        // 如果在此处发生异常，通常是由于：
-        // 1. Debug 模式链接了 Release 版的 mysqlcppconn.lib (导致 std::string 崩溃)
-        // 2. 缺少依赖的 DLL (libcrypto-3-x64.dll, libssl-3-x64.dll)
-        // 3. MySQL 服务未启动或防火墙拦截
-        connection_ = driver_->connect(connection_options);
-
-        if (!connection_ || !connection_->isValid()) {
-            last_error_ = "数据库连接无效";
-            if (connection_) {
-                delete connection_;
-                connection_ = nullptr;
-            }
-            return false;
-        }
-
-        database_name_ = database;
-        std::cout << "[Database] 连接成功: " << host << " / " << database << std::endl;
-        return true;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("MySQL SQL异常: ") + e.what() + " (代码: " + std::to_string(e.getErrorCode()) + ")";
-        std::cerr << "[Database] " << last_error_ << std::endl;
-        if (connection_) {
-            delete connection_;
-            connection_ = nullptr;
-        }
+    std::cout << "[Database] 正在初始化 MariaDB/MySQL 客户端..." << std::endl;
+    connection_ = mysql_init(nullptr);
+    if (!connection_) {
+        last_error_ = "无法初始化 MariaDB/MySQL 客户端";
         return false;
     }
-    catch (const std::exception& e) {
-        last_error_ = std::string("标准异常: ") + e.what();
+
+    std::string url = "tcp://" + host + ":" + std::to_string(port);
+    std::cout << "[Database] 准备连接到: " << url << std::endl;
+
+    MYSQL* connected = mysql_real_connect(
+        connection_,
+        host.c_str(),
+        user.c_str(),
+        password.c_str(),
+        database.c_str(),
+        static_cast<unsigned int>(port),
+        nullptr,
+        0
+    );
+
+    if (!connected) {
+        last_error_ = std::string("连接失败: ") + mysqlError(connection_);
         std::cerr << "[Database] " << last_error_ << std::endl;
+        mysql_close(connection_);
+        connection_ = nullptr;
         return false;
     }
-    catch (...) {
-        last_error_ = "发生未知异常（极大可能是 Debug 模式链接了 Release 版库导致的内存布局冲突）";
+
+    if (mysql_set_character_set(connection_, "utf8mb4") != 0) {
+        last_error_ = std::string("设置字符集失败: ") + mysqlError(connection_);
         std::cerr << "[Database] " << last_error_ << std::endl;
+        mysql_close(connection_);
+        connection_ = nullptr;
         return false;
     }
+
+    database_name_ = database;
+    std::cout << "[Database] 连接成功: " << host << " / " << database << std::endl;
+    return true;
 }
 
 void MediaDatabase::disconnect()
 {
     if (connection_) {
-        try {
-            connection_->close();
-        }
-        catch (...) {}
-        delete connection_;
+        mysql_close(connection_);
         connection_ = nullptr;
     }
 }
@@ -108,35 +171,8 @@ bool MediaDatabase::initTables()
         return false;
     }
 
-    try {
-        sql::Statement* stmt = connection_->createStatement();
-
-        // --------------------------------------------------------
-        // 媒体库主表
-        /** 
-        * 字段说明：
-        * - id: 自增主键
-        * - file_path: 文件完整路径（唯一约束，防止重复添加）
-        * - file_name: 文件名
-        * - format: 容器格式
-        * - duration: 时长（秒）
-        * - file_size: 文件大小（字节）
-        * - video_width/height: 视频分辨率
-        * - video_codec: 视频编码器
-        * - video_frame_rate: 帧率
-        * - video_bit_rate: 视频码率
-        * - audio_codec: 音频编码器
-        * - audio_sample_rate: 采样率
-        * - audio_channels: 声道数
-        * - audio_bit_rate: 音频码率
-        * - title: 自定义标题
-        * - tags: 标签（逗号分隔）
-        * - is_favorite: 是否收藏
-        * - play_count: 播放次数
-        * - added_time: 添加时间
-        * - last_play_time: 最后播放时间*/
-        // --------------------------------------------------------
-        stmt->execute(R"(
+    const char* statements[] = {
+        R"(
             CREATE TABLE IF NOT EXISTS media_library (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 file_path VARCHAR(500) NOT NULL UNIQUE,
@@ -160,33 +196,23 @@ bool MediaDatabase::initTables()
                 added_time DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_play_time DATETIME
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        )");
-
-        // --------------------------------------------------------
-        // 播放历史表
-        // --------------------------------------------------------
-        stmt->execute(R"(
+        )",
+        R"(
             CREATE TABLE IF NOT EXISTS play_history (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 media_id INT NOT NULL,
                 play_time DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (media_id) REFERENCES media_library(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        )");
-
-        // --------------------------------------------------------
-        // 播放列表表
-        // --------------------------------------------------------
-        stmt->execute(R"(
+        )",
+        R"(
             CREATE TABLE IF NOT EXISTS playlists (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(100) NOT NULL,
                 created_time DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        )");
-
-        // 播放列表项表（多对多关系）
-        stmt->execute(R"(
+        )",
+        R"(
             CREATE TABLE IF NOT EXISTS playlist_items (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 playlist_id INT NOT NULL,
@@ -195,17 +221,18 @@ bool MediaDatabase::initTables()
                 FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
                 FOREIGN KEY (media_id) REFERENCES media_library(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        )");
+        )"
+    };
 
-        delete stmt;
-        std::cout << "[Database] 表初始化成功" << std::endl;
-        return true;
+    for (const char* statement : statements) {
+        if (!execute(connection_, statement, last_error_, "建表失败")) {
+            std::cerr << "[Database] " << last_error_ << std::endl;
+            return false;
+        }
     }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("建表失败: ") + e.what();
-        std::cerr << "[Database] " << last_error_ << std::endl;
-        return false;
-    }
+
+    std::cout << "[Database] 表初始化成功" << std::endl;
+    return true;
 }
 
 // ============================================================
@@ -215,57 +242,38 @@ int MediaDatabase::addMedia(const MediaInfo& info)
 {
     if (!connection_) return -1;
 
-    try {
-        // 使用PreparedStatement防止SQL注入
-        // ? 是参数占位符，后续通过setXXX方法设置值
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "INSERT INTO media_library "
-            "(file_path, file_name, format, duration, file_size, "
-            "video_width, video_height, video_codec, video_frame_rate, video_bit_rate, "
-            "audio_codec, audio_sample_rate, audio_channels, audio_bit_rate, "
-            "title, tags) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+    std::string title = info.title.empty() ? info.file_name : info.title;
+    std::ostringstream sql;
+    sql << "INSERT INTO media_library "
+        << "(file_path, file_name, format, duration, file_size, "
+        << "video_width, video_height, video_codec, video_frame_rate, video_bit_rate, "
+        << "audio_codec, audio_sample_rate, audio_channels, audio_bit_rate, "
+        << "title, tags) VALUES ("
+        << quote(connection_, info.file_path) << ", "
+        << quote(connection_, info.file_name) << ", "
+        << quote(connection_, info.format_name) << ", "
+        << number(info.duration) << ", "
+        << info.file_size << ", "
+        << info.video_info.width << ", "
+        << info.video_info.height << ", "
+        << quote(connection_, info.video_info.codec_name) << ", "
+        << number(info.video_info.frame_rate) << ", "
+        << info.video_info.bit_rate << ", "
+        << quote(connection_, info.audio_info.codec_name) << ", "
+        << info.audio_info.sample_rate << ", "
+        << info.audio_info.channels << ", "
+        << info.audio_info.bit_rate << ", "
+        << quote(connection_, title) << ", "
+        << quote(connection_, info.tags) << ")";
 
-        // 设置参数（索引从1开始）
-        pstmt->setString(1, info.file_path);
-        pstmt->setString(2, info.file_name);
-        pstmt->setString(3, info.format_name);
-        pstmt->setDouble(4, info.duration);
-        pstmt->setInt64(5, info.file_size);
-        pstmt->setInt(6, info.video_info.width);
-        pstmt->setInt(7, info.video_info.height);
-        pstmt->setString(8, info.video_info.codec_name);
-        pstmt->setDouble(9, info.video_info.frame_rate);
-        pstmt->setInt(10, info.video_info.bit_rate);
-        pstmt->setString(11, info.audio_info.codec_name);
-        pstmt->setInt(12, info.audio_info.sample_rate);
-        pstmt->setInt(13, info.audio_info.channels);
-        pstmt->setInt(14, info.audio_info.bit_rate);
-        pstmt->setString(15, info.title.empty() ? info.file_name : info.title);
-        pstmt->setString(16, info.tags);
-
-        pstmt->executeUpdate();
-        delete pstmt;
-
-        // 获取自增ID
-        sql::Statement* stmt = connection_->createStatement();
-        sql::ResultSet* rs = stmt->executeQuery("SELECT LAST_INSERT_ID()");
-        int id = -1;
-        if (rs->next()) {
-            id = rs->getInt(1);
-        }
-        delete rs;
-        delete stmt;
-
-        std::cout << "[Database] 添加媒体: " << info.file_name << " (ID=" << id << ")" << std::endl;
-        return id;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("添加失败: ") + e.what();
+    if (!execute(connection_, sql.str(), last_error_, "添加失败")) {
         std::cerr << "[Database] " << last_error_ << std::endl;
         return -1;
     }
+
+    int id = static_cast<int>(mysql_insert_id(connection_));
+    std::cout << "[Database] 添加媒体: " << info.file_name << " (ID=" << id << ")" << std::endl;
+    return id;
 }
 
 // ============================================================
@@ -275,23 +283,17 @@ bool MediaDatabase::updateMedia(int id, const MediaInfo& info)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "UPDATE media_library SET title=?, tags=?, is_favorite=? WHERE id=?"
-        );
-        pstmt->setString(1, info.title);
-        pstmt->setString(2, info.tags);
-        pstmt->setInt(3, info.is_favorite ? 1 : 0);
-        pstmt->setInt(4, id);
+    std::ostringstream sql;
+    sql << "UPDATE media_library SET title=" << quote(connection_, info.title)
+        << ", tags=" << quote(connection_, info.tags)
+        << ", is_favorite=" << (info.is_favorite ? 1 : 0)
+        << " WHERE id=" << id;
 
-        int rows = pstmt->executeUpdate();
-        delete pstmt;
-        return rows > 0;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("更新失败: ") + e.what();
+    if (!execute(connection_, sql.str(), last_error_, "更新失败")) {
         return false;
     }
+
+    return mysql_affected_rows(connection_) > 0;
 }
 
 // ============================================================
@@ -301,19 +303,12 @@ bool MediaDatabase::deleteMedia(int id)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "DELETE FROM media_library WHERE id=?"
-        );
-        pstmt->setInt(1, id);
-        int rows = pstmt->executeUpdate();
-        delete pstmt;
-        return rows > 0;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("删除失败: ") + e.what();
+    std::string sql = "DELETE FROM media_library WHERE id=" + std::to_string(id);
+    if (!execute(connection_, sql, last_error_, "删除失败")) {
         return false;
     }
+
+    return mysql_affected_rows(connection_) > 0;
 }
 
 // ============================================================
@@ -323,27 +318,19 @@ bool MediaDatabase::getMediaById(int id, MediaInfo& info)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "SELECT * FROM media_library WHERE id=?"
-        );
-        pstmt->setInt(1, id);
-        sql::ResultSet* rs = pstmt->executeQuery();
+    std::string sql = "SELECT * FROM media_library WHERE id=" + std::to_string(id);
+    MYSQL_RES* result = query(connection_, sql, last_error_, "查询ID失败");
+    if (!result) return false;
 
-        bool found = false;
-        if (rs->next()) {
-            readMediaFromResultSet(rs, info);
-            found = true;
-        }
+    bool found = false;
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row) {
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        found = true;
+    }
 
-        delete rs;
-        delete pstmt;
-        return found;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询ID失败: ") + e.what();
-        return false;
-    }
+    mysql_free_result(result);
+    return found;
 }
 
 // ============================================================
@@ -353,27 +340,19 @@ bool MediaDatabase::getMediaByPath(const std::string& path, MediaInfo& info)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "SELECT * FROM media_library WHERE file_path = ?"
-        );
-        pstmt->setString(1, path);
+    std::string sql = "SELECT * FROM media_library WHERE file_path = " + quote(connection_, path);
+    MYSQL_RES* result = query(connection_, sql, last_error_, "查询路径失败");
+    if (!result) return false;
 
-        sql::ResultSet* rs = pstmt->executeQuery();
-        bool found = false;
-        if (rs->next()) {
-            readMediaFromResultSet(rs, info);
-            found = true;
-        }
+    bool found = false;
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row) {
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        found = true;
+    }
 
-        delete rs;
-        delete pstmt;
-        return found;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询路径失败: ") + e.what();
-        return false;
-    }
+    mysql_free_result(result);
+    return found;
 }
 
 // ============================================================
@@ -383,27 +362,24 @@ bool MediaDatabase::getAllMedia(std::vector<MediaInfo>& media_list)
 {
     if (!connection_) return false;
 
-    try {
-        sql::Statement* stmt = connection_->createStatement();
-        sql::ResultSet* rs = stmt->executeQuery(
-            "SELECT * FROM media_library ORDER BY added_time DESC"
-        );
+    MYSQL_RES* result = query(
+        connection_,
+        "SELECT * FROM media_library ORDER BY added_time DESC",
+        last_error_,
+        "查询失败"
+    );
+    if (!result) return false;
 
-        media_list.clear();
-        while (rs->next()) {
-            MediaInfo info;
-            readMediaFromResultSet(rs, info);
-            media_list.push_back(info);
-        }
+    media_list.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result)) != nullptr) {
+        MediaInfo info;
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        media_list.push_back(info);
+    }
 
-        delete rs;
-        delete stmt;
-        return true;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询失败: ") + e.what();
-        return false;
-    }
+    mysql_free_result(result);
+    return true;
 }
 
 // ============================================================
@@ -413,36 +389,27 @@ bool MediaDatabase::searchMedia(const std::string& keyword, std::vector<MediaInf
 {
     if (!connection_) return false;
 
-    try {
-        // 使用LIKE进行模糊搜索
-        // %keyword% 匹配包含关键词的任意字符串
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "SELECT * FROM media_library WHERE "
-            "file_name LIKE ? OR title LIKE ? OR tags LIKE ? "
-            "ORDER BY added_time DESC"
-        );
+    std::string pattern = "%" + keyword + "%";
+    std::ostringstream sql;
+    sql << "SELECT * FROM media_library WHERE "
+        << "file_name LIKE " << quote(connection_, pattern)
+        << " OR title LIKE " << quote(connection_, pattern)
+        << " OR tags LIKE " << quote(connection_, pattern)
+        << " ORDER BY added_time DESC";
 
-        std::string pattern = "%" + keyword + "%";
-        pstmt->setString(1, pattern);
-        pstmt->setString(2, pattern);
-        pstmt->setString(3, pattern);
+    MYSQL_RES* result = query(connection_, sql.str(), last_error_, "搜索失败");
+    if (!result) return false;
 
-        sql::ResultSet* rs = pstmt->executeQuery();
-        results.clear();
-        while (rs->next()) {
-            MediaInfo info;
-            readMediaFromResultSet(rs, info);
-            results.push_back(info);
-        }
-
-        delete rs;
-        delete pstmt;
-        return true;
+    results.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result)) != nullptr) {
+        MediaInfo info;
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        results.push_back(info);
     }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("搜索失败: ") + e.what();
-        return false;
-    }
+
+    mysql_free_result(result);
+    return true;
 }
 
 // ============================================================
@@ -452,30 +419,13 @@ bool MediaDatabase::recordPlayHistory(int media_id)
 {
     if (!connection_) return false;
 
-    try {
-        // 插入播放历史记录
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "INSERT INTO play_history (media_id) VALUES (?)"
-        );
-        pstmt->setInt(1, media_id);
-        pstmt->executeUpdate();
-        delete pstmt;
-
-        // 更新媒体文件的播放次数和最后播放时间
-        sql::PreparedStatement* pstmt2 = connection_->prepareStatement(
-            "UPDATE media_library SET play_count = play_count + 1, "
-            "last_play_time = NOW() WHERE id = ?"
-        );
-        pstmt2->setInt(1, media_id);
-        pstmt2->executeUpdate();
-        delete pstmt2;
-
-        return true;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("记录播放历史失败: ") + e.what();
+    std::string insert_sql = "INSERT INTO play_history (media_id) VALUES (" + std::to_string(media_id) + ")";
+    if (!execute(connection_, insert_sql, last_error_, "记录播放历史失败")) {
         return false;
     }
+
+    std::string update_sql = "UPDATE media_library SET play_count = play_count + 1, last_play_time = NOW() WHERE id = " + std::to_string(media_id);
+    return execute(connection_, update_sql, last_error_, "记录播放历史失败");
 }
 
 // ============================================================
@@ -485,114 +435,99 @@ bool MediaDatabase::setFavorite(int id, bool favorite)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "UPDATE media_library SET is_favorite = ? WHERE id = ?"
-        );
-        pstmt->setInt(1, favorite ? 1 : 0);
-        pstmt->setInt(2, id);
-        int rows = pstmt->executeUpdate();
-        delete pstmt;
-        return rows > 0;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("收藏操作失败: ") + e.what();
+    std::ostringstream sql;
+    sql << "UPDATE media_library SET is_favorite = " << (favorite ? 1 : 0)
+        << " WHERE id = " << id;
+
+    if (!execute(connection_, sql.str(), last_error_, "收藏操作失败")) {
         return false;
     }
+
+    return mysql_affected_rows(connection_) > 0;
 }
 
 bool MediaDatabase::getFavorites(std::vector<MediaInfo>& results)
 {
     if (!connection_) return false;
 
-    try {
-        sql::Statement* stmt = connection_->createStatement();
-        sql::ResultSet* rs = stmt->executeQuery(
-            "SELECT * FROM media_library WHERE is_favorite = 1 ORDER BY title"
-        );
+    MYSQL_RES* result = query(
+        connection_,
+        "SELECT * FROM media_library WHERE is_favorite = 1 ORDER BY title",
+        last_error_,
+        "查询收藏失败"
+    );
+    if (!result) return false;
 
-        results.clear();
-        while (rs->next()) {
-            MediaInfo info;
-            readMediaFromResultSet(rs, info);
-            results.push_back(info);
-        }
+    results.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result)) != nullptr) {
+        MediaInfo info;
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        results.push_back(info);
+    }
 
-        delete rs;
-        delete stmt;
-        return true;
-    }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询收藏失败: ") + e.what();
-        return false;
-    }
+    mysql_free_result(result);
+    return true;
 }
 
 bool MediaDatabase::getRecentPlayed(std::vector<MediaInfo>& results, int limit)
 {
     if (!connection_) return false;
 
-    try {
-        sql::PreparedStatement* pstmt = connection_->prepareStatement(
-            "SELECT m.* FROM media_library m "
-            "INNER JOIN play_history p ON m.id = p.media_id "
-            "GROUP BY m.id ORDER BY MAX(p.play_time) DESC LIMIT ?"
-        );
-        pstmt->setInt(1, limit);
-
-        sql::ResultSet* rs = pstmt->executeQuery();
-        results.clear();
-        while (rs->next()) {
-            MediaInfo info;
-            readMediaFromResultSet(rs, info);
-            results.push_back(info);
-        }
-
-        delete rs;
-        delete pstmt;
-        return true;
+    if (limit <= 0) {
+        limit = 20;
     }
-    catch (const sql::SQLException& e) {
-        last_error_ = std::string("查询最近播放失败: ") + e.what();
-        return false;
+
+    std::ostringstream sql;
+    sql << "SELECT m.* FROM media_library m "
+        << "INNER JOIN play_history p ON m.id = p.media_id "
+        << "GROUP BY m.id ORDER BY MAX(p.play_time) DESC LIMIT " << limit;
+
+    MYSQL_RES* result = query(connection_, sql.str(), last_error_, "查询最近播放失败");
+    if (!result) return false;
+
+    results.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result)) != nullptr) {
+        MediaInfo info;
+        readMediaFromResultSet(row, mysql_fetch_lengths(result), info);
+        results.push_back(info);
     }
+
+    mysql_free_result(result);
+    return true;
 }
 
 // ============================================================
 // 从ResultSet读取MediaInfo
 // ============================================================
-void MediaDatabase::readMediaFromResultSet(sql::ResultSet* rs, MediaInfo& info)
+void MediaDatabase::readMediaFromResultSet(MYSQL_ROW row, unsigned long* lengths, MediaInfo& info)
 {
-    info.db_id = rs->getInt("id");
-    info.file_path = rs->getString("file_path");
-    info.file_name = rs->getString("file_name");
-    info.format_name = rs->getString("format");
-    info.duration = rs->getDouble("duration");
-    info.file_size = rs->getInt64("file_size");
+    info.db_id = toInt(row, 0);
+    info.file_path = field(row, lengths, 1);
+    info.file_name = field(row, lengths, 2);
+    info.format_name = field(row, lengths, 3);
+    info.duration = toDouble(row, 4);
+    info.file_size = toInt64(row, 5);
 
-    info.video_info.width = rs->getInt("video_width");
-    info.video_info.height = rs->getInt("video_height");
-    info.video_info.codec_name = rs->getString("video_codec");
-    info.video_info.frame_rate = rs->getDouble("video_frame_rate");
-    info.video_info.bit_rate = rs->getInt("video_bit_rate");
+    info.video_info.width = toInt(row, 6);
+    info.video_info.height = toInt(row, 7);
+    info.video_info.codec_name = field(row, lengths, 8);
+    info.video_info.frame_rate = toDouble(row, 9);
+    info.video_info.bit_rate = toInt(row, 10);
 
-    info.audio_info.codec_name = rs->getString("audio_codec");
-    info.audio_info.sample_rate = rs->getInt("audio_sample_rate");
-    info.audio_info.channels = rs->getInt("audio_channels");
-    info.audio_info.bit_rate = rs->getInt("audio_bit_rate");
+    info.audio_info.codec_name = field(row, lengths, 11);
+    info.audio_info.sample_rate = toInt(row, 12);
+    info.audio_info.channels = toInt(row, 13);
+    info.audio_info.bit_rate = toInt(row, 14);
 
-    info.title = rs->getString("title");
-    info.tags = rs->getString("tags");
-    info.is_favorite = rs->getInt("is_favorite") != 0;
-    info.play_count = rs->getInt("play_count");
+    info.title = field(row, lengths, 15);
+    info.tags = field(row, lengths, 16);
+    info.is_favorite = toInt(row, 17) != 0;
+    info.play_count = toInt(row, 18);
 
-    // 处理可能为NULL的字段
-    sql::SQLString added = rs->getString("added_time");
-    info.added_time = added.c_str();
-    if (!rs->wasNull()) {
-        sql::SQLString last = rs->getString("last_play_time");
-        info.last_play_time = last.c_str();
-    }
+    info.added_time = field(row, lengths, 19);
+    info.last_play_time = field(row, lengths, 20);
 
     info.has_video = (info.video_info.width > 0);
     info.has_audio = (info.audio_info.sample_rate > 0);

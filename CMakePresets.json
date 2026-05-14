@@ -15,7 +15,8 @@
         "MEDIASTUDIO_QT_ROOT": "E:/Qt/6.11.0/mingw_64",
         "MEDIASTUDIO_FFMPEG_ROOT": "E:/ffmpeg",
         "MEDIASTUDIO_GLEW_ROOT": "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1",
-        "MEDIASTUDIO_ENABLE_MYSQL": "OFF",
+        "MEDIASTUDIO_MYSQL_CONNECTOR_ROOT": "${sourceDir}/third_party/mariadb/mingw64",
+        "MEDIASTUDIO_ENABLE_MYSQL": "ON",
         "MEDIASTUDIO_DEPLOY_RUNTIME": "ON"
       }
     },
@@ -33,7 +34,8 @@
         "MEDIASTUDIO_QT_ROOT": "E:/Qt/6.11.0/mingw_64",
         "MEDIASTUDIO_FFMPEG_ROOT": "E:/ffmpeg",
         "MEDIASTUDIO_GLEW_ROOT": "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1",
-        "MEDIASTUDIO_ENABLE_MYSQL": "OFF",
+        "MEDIASTUDIO_MYSQL_CONNECTOR_ROOT": "${sourceDir}/third_party/mariadb/mingw64",
+        "MEDIASTUDIO_ENABLE_MYSQL": "ON",
         "MEDIASTUDIO_DEPLOY_RUNTIME": "ON"
       }
     }

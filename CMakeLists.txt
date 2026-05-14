@@ -18,7 +18,7 @@ option(MEDIASTUDIO_DEPLOY_RUNTIME "Copy runtime DLLs after build" ON)
 set(MEDIASTUDIO_QT_ROOT "E:/Qt/6.11.0/mingw_64" CACHE PATH "Qt installation root")
 set(MEDIASTUDIO_FFMPEG_ROOT "E:/ffmpeg" CACHE PATH "FFmpeg installation root")
 set(MEDIASTUDIO_GLEW_ROOT "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1" CACHE PATH "GLEW installation root")
-set(MEDIASTUDIO_MYSQL_CONNECTOR_ROOT "E:/mysql-connector-c++" CACHE PATH "MySQL Connector/C++ root")
+set(MEDIASTUDIO_MYSQL_CONNECTOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mariadb/mingw64" CACHE PATH "MySQL Connector/C root")
 set(MEDIASTUDIO_MYSQL_SERVER_ROOT "E:/MySQL/MySQL Server 8.0" CACHE PATH "MySQL Server root")
 
 if(EXISTS "${MEDIASTUDIO_QT_ROOT}")
@@ -138,55 +138,16 @@ if(WIN32)
 endif()
 
 if(MEDIASTUDIO_ENABLE_MYSQL)
-    set(MEDIASTUDIO_MYSQL_INCLUDE_CANDIDATES
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/include"
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/include/jdbc"
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/include/jdbc/cppconn"
-        "${MEDIASTUDIO_MYSQL_SERVER_ROOT}/include"
-        "C:/Program Files/MySQL/mysql-connector-c++-9.6.0-winx64/mysql-connector-c++-9.6.0-winx64/include"
-        "C:/Program Files/MySQL/mysql-connector-c++-9.6.0-winx64/mysql-connector-c++-9.6.0-winx64/include/jdbc"
-        "C:/Program Files/MySQL/mysql-connector-c++-9.6.0-winx64/mysql-connector-c++-9.6.0-winx64/include/jdbc/cppconn"
-        "C:/Program Files/MySQL/MySQL Server 8.0/include"
-    )
+    set(MEDIASTUDIO_MYSQL_INCLUDE_DIR "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/include/mysql")
+    set(MEDIASTUDIO_MYSQL_LIBRARY "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib/libmariadb.dll.a")
 
-    foreach(mysql_include IN LISTS MEDIASTUDIO_MYSQL_INCLUDE_CANDIDATES)
-        if(EXISTS "${mysql_include}")
-            target_include_directories(MediaStudio PRIVATE "${mysql_include}")
-        endif()
-    endforeach()
+    if(NOT EXISTS "${MEDIASTUDIO_MYSQL_INCLUDE_DIR}/mysql.h")
+        message(FATAL_ERROR "MariaDB/MySQL C API header not found: ${MEDIASTUDIO_MYSQL_INCLUDE_DIR}/mysql.h")
+    endif()
 
-    set(MEDIASTUDIO_MYSQL_LIBRARY_CANDIDATE_DIRS
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib64"
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib64/vs14"
-        "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib"
-        "${MEDIASTUDIO_MYSQL_SERVER_ROOT}/lib"
-        "C:/Program Files/MySQL/mysql-connector-c++-9.6.0-winx64/mysql-connector-c++-9.6.0-winx64/lib64/vs14"
-        "C:/Program Files/MySQL/MySQL Server 8.0/lib"
-    )
-
-    foreach(mysql_lib_name mysqlcppconn mysqlcppconnx libmysql)
-        unset(mysql_lib_path)
-        foreach(mysql_lib_dir IN LISTS MEDIASTUDIO_MYSQL_LIBRARY_CANDIDATE_DIRS)
-            if(MINGW AND EXISTS "${mysql_lib_dir}/lib${mysql_lib_name}.dll.a")
-                set(mysql_lib_path "${mysql_lib_dir}/lib${mysql_lib_name}.dll.a")
-                break()
-            elseif(EXISTS "${mysql_lib_dir}/${mysql_lib_name}.lib")
-                set(mysql_lib_path "${mysql_lib_dir}/${mysql_lib_name}.lib")
-                break()
-            elseif(EXISTS "${mysql_lib_dir}/${mysql_lib_name}.dll")
-                set(mysql_lib_path "${mysql_lib_dir}/${mysql_lib_name}.dll")
-                break()
-            endif()
-        endforeach()
-
-        if(NOT mysql_lib_path)
-            message(FATAL_ERROR "MySQL library not found: ${mysql_lib_name}. Set MEDIASTUDIO_MYSQL_CONNECTOR_ROOT and MEDIASTUDIO_MYSQL_SERVER_ROOT, or configure with MEDIASTUDIO_ENABLE_MYSQL=OFF.")
-        endif()
-
-        set(mysql_target "MySQL::${mysql_lib_name}")
-        mediastudio_import_unknown_library(${mysql_target} "${mysql_lib_path}")
-        target_link_libraries(MediaStudio PRIVATE ${mysql_target})
-    endforeach()
+    target_include_directories(MediaStudio PRIVATE "${MEDIASTUDIO_MYSQL_INCLUDE_DIR}")
+    mediastudio_import_unknown_library(MySQL::mariadb "${MEDIASTUDIO_MYSQL_LIBRARY}")
+    target_link_libraries(MediaStudio PRIVATE MySQL::mariadb)
 endif()
 
 if(MEDIASTUDIO_DEPLOY_RUNTIME AND WIN32)
@@ -204,12 +165,8 @@ if(MEDIASTUDIO_DEPLOY_RUNTIME AND WIN32)
     endif()
 
     if(MEDIASTUDIO_ENABLE_MYSQL)
-        file(GLOB MEDIASTUDIO_MYSQL_RUNTIME_DLLS
-            "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib64/*.dll"
-            "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib64/vs14/*.dll"
-            "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/lib/*.dll"
-            "${MEDIASTUDIO_MYSQL_SERVER_ROOT}/lib/*.dll"
-        )
+        file(GLOB MEDIASTUDIO_MYSQL_RUNTIME_DLLS "${MEDIASTUDIO_MYSQL_CONNECTOR_ROOT}/bin/*.dll")
+        list(FILTER MEDIASTUDIO_MYSQL_RUNTIME_DLLS EXCLUDE REGEX ".*(libgcc_s_seh-1|libstdc\\+\\+-6|libwinpthread-1)\\.dll$")
         if(MEDIASTUDIO_MYSQL_RUNTIME_DLLS)
             add_custom_command(TARGET MediaStudio POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MEDIASTUDIO_MYSQL_RUNTIME_DLLS} $<TARGET_FILE_DIR:MediaStudio>

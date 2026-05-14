@@ -13,8 +13,5 @@ if (!(Test-Path (Join-Path $MingwBin "g++.exe"))) {
 
 $env:Path = "$MingwBin;E:\Qt\Tools\Ninja;$env:Path"
 
-if (!(Test-Path (Join-Path $ProjectRoot "build\mingw-release\CMakeCache.txt"))) {
-    & $CMake --preset mingw-release
-}
-
+& $CMake --preset mingw-release
 & $CMake --build --preset mingw-release

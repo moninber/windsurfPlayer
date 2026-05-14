@@ -200,6 +200,29 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - 转码生成后的文件时长不对（如 5s 变 47 分钟），画面声音异常。
 - AVI 转回 MP4 时没有画面。
 
+### 3.10 频谱可视化与高 DPI 渲染修复
+
+**症状**：
+- **画面偏移**：在迁移至 MinGW/CMake 构建后，视频和频谱画面只占据窗口左下角，未能铺满。
+- **视觉失衡**：频谱图左侧（低频）高度远高于右侧（高频），右侧几乎不跳动。
+
+**根因**：
+- **高 DPI 缩放**：`QOpenGLWidget` 在高分屏下，`width()` 返回的是逻辑坐标，而 OpenGL 的 `glViewport` 需要物理像素。如果不乘以 `devicePixelRatioF()`，视口只会覆盖真实帧缓冲的左下角。
+- **能量分布与分组逻辑**：
+  - **物理特性**：自然音频能量符合粉红噪声规律，低频能量远大于高频。也就是说，频率越低，通常能量越高
+  - **线性分组**：代码采用 `usable_bins / bar_count_` 线性平分频率，导致高频能量被过度稀释，不符合人耳的对数感知。
+
+**修复内容**：
+- **VideoWidget.cpp**：修改 `paintGL()` 渲染逻辑：
+  - 引入 `devicePixelRatioF()` 获取缩放因子。
+  - 计算物理像素尺寸 `viewport_width = width() * dpr`。
+  - 将物理像素尺寸传递给 `renderer_->setViewport()` 和 `visualizer_->render()`。
+- **AudioVisualizer.cpp**：优化代码可读性，明确了 `computeSpectrum()` 与 `setSpectrumData()` 的冗余关系（目前核心路径走 `computeSpectrum`）。
+
+**状态**：
+- **已修复**：画面已正确铺满窗口。
+- **保留现状**：频谱“左高右低”现象确认为物理特性与线性分组导致，作为 V1 版本的技术底座保留，暂不进行对数分组重构，优先进入 V2 AI 增强阶段。
+
 **根因**：
 - **音频 Planar 格式处理错误**：原代码错误地使用了 `av_samples_alloc` 和 `memcpy` 处理平面音频（如 FLTP），导致内存越界。
 - **时间戳 (PTS) 未缩放**：直接拷贝解码帧的 PTS，未根据输入输出流的 `time_base` 进行 `av_rescale_q` 转换。

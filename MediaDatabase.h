@@ -2,14 +2,14 @@
  * @file MediaDatabase.h
  * @brief 媒体数据库 - 基于MySQL的媒体库管理
  * 
- * 本类使用MySQL Connector/C++实现媒体文件的数据库存储与管理：
+ * 本类使用MariaDB/MySQL C API实现媒体文件的数据库存储与管理：
  * 
- * MySQL Connector/C++ 使用流程：
- * 1. sql::mysql::get_mysql_driver_instance() → 获取驱动实例
- * 2. driver->connect()                       → 建立数据库连接
- * 3. con->createStatement()                  → 创建SQL语句对象
- * 4. stmt->execute() / stmt->executeQuery()  → 执行SQL
- * 5. ResultSet遍历                            → 处理查询结果
+ * MariaDB/MySQL C API 使用流程：
+ * 1. mysql_init()                            → 初始化客户端连接对象
+ * 2. mysql_real_connect()                    → 建立数据库连接
+ * 3. mysql_query()                           → 执行SQL语句
+ * 4. mysql_store_result()                    → 获取查询结果
+ * 5. MYSQL_ROW遍历                           → 处理查询结果
  * 
  * 数据库表设计：
  * - media_library：主表，存储媒体文件信息和元数据
@@ -17,7 +17,7 @@
  * - playlists：播放列表表
  * 
  * 学习要点：
- * - MySQL Connector/C++ API
+ * - MariaDB/MySQL C API
  * - SQL语句编写（CREATE, INSERT, SELECT, UPDATE, DELETE）
  * - Prepared Statement（参数化查询，防止SQL注入）
  * - 数据库连接管理
@@ -37,14 +37,7 @@
 
 #if MEDIASTUDIO_ENABLE_MYSQL
 
-// MySQL Connector/C++ 头文件
-// 包含路径需要配置到项目属性中
-#include <mysql_driver.h>
-#include <mysql_connection.h>
-#include <cppconn/statement.h>
-#include <cppconn/resultset.h>
-#include <cppconn/prepared_statement.h>
-#include <cppconn/exception.h>
+#include <mysql.h>
 
 class MediaDatabase {
 public:
@@ -169,10 +162,9 @@ private:
      * @param rs 结果集
      * @param info 输出信息
      */
-    void readMediaFromResultSet(sql::ResultSet* rs, MediaInfo& info);
+    void readMediaFromResultSet(MYSQL_ROW row, unsigned long* lengths, MediaInfo& info);
 
-    sql::mysql::MySQL_Driver* driver_;     // MySQL驱动（单例，不需要释放）
-    sql::Connection* connection_;           // 数据库连接
+    MYSQL* connection_;                    // 数据库连接
     std::string last_error_;                // 最后错误信息
     std::string database_name_;             // 当前数据库名
 };
