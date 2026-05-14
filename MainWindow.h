@@ -44,6 +44,7 @@
 #include <QTimer>
 #include <QAction>
 #include <QMenuBar>
+#include <QString>
 
 #include <atomic>
 #include <mutex>
@@ -130,6 +131,7 @@ private:
     QComboBox* combo_speed_;
     QListWidget* list_playlist_;
     QTextEdit* text_media_info_;
+    QString last_media_info_html_;
     QDockWidget* dock_playlist_;
     QDockWidget* dock_info_;
 

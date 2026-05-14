@@ -22,6 +22,7 @@
 #include <QStatusBar>
 #include <QAction>
 #include <QShortcut>
+#include <QScrollBar>
 #include <iostream>
 #include <chrono>
 
@@ -875,7 +876,12 @@ void MainWindow::updatePlaybackInfo()
             info_text += QString("<p>声道: %1</p>").arg(info.audio_info.channels);
         }
 
-        text_media_info_->setHtml(info_text);
+        if (info_text != last_media_info_html_) {
+            int scroll_value = text_media_info_->verticalScrollBar()->value();
+            text_media_info_->setHtml(info_text);
+            text_media_info_->verticalScrollBar()->setValue(scroll_value);
+            last_media_info_html_ = info_text;
+        }
     }
 }
 
