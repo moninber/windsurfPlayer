@@ -21,6 +21,7 @@ AudioOutput::AudioOutput()
     , wave_format_(nullptr)
     , volume_(1.0f)
     , playing_(false)
+    , submitted_frames_(0)
     , com_initialized_(false)
     , buffer_frame_count_(0)
     , audio_event_(nullptr)
@@ -38,6 +39,7 @@ bool AudioOutput::init(int sample_rate, int channels)
 
     sample_rate_ = sample_rate;
     channels_ = channels;
+    submitted_frames_.store(0);
 
     // 后台线程需要自己初始化COM（WASAPI是COM对象）
     // COINIT_MULTITHREADED适合后台工作线程
@@ -135,7 +137,7 @@ bool AudioOutput::init(int sample_rate, int channels)
     // 分配音频缓冲区，指定缓冲持续时间
     // REFERENCE_TIME单位：100纳秒（1秒 = 10,000,000 × 100ns）
     // --------------------------------------------------------
-    REFERENCE_TIME buffer_duration = 2000000; // 0.2秒缓冲（短缓冲才能精确限速）
+    REFERENCE_TIME buffer_duration = 3500000; // 0.35秒缓冲（降低单线程同步等待导致的音频饿死风险）
     DWORD stream_flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
     hr = audio_client_->Initialize(
         AUDCLNT_SHAREMODE_SHARED,  // 共享模式（与其他应用共享设备）
@@ -179,6 +181,7 @@ void AudioOutput::cleanup()
         audio_client_->Stop();
     }
     playing_.store(false);
+    submitted_frames_.store(0);
 
     // 释放COM接口（调用Release()减少引用计数）
     // 释放顺序：后获取的先释放
@@ -259,6 +262,7 @@ bool AudioOutput::play(const std::vector<uint8_t>& data)
                     playing_.store(true);
                 }
 
+                submitted_frames_.fetch_add(to_write);
                 written_frames += to_write;
                 idle_retry = 0;
                 continue;
@@ -273,6 +277,44 @@ bool AudioOutput::play(const std::vector<uint8_t>& data)
     }
 
     return true;
+}
+
+double AudioOutput::getQueuedSeconds()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!audio_client_ || !wave_format_ || wave_format_->nSamplesPerSec == 0) return 0.0;
+
+    UINT32 padding_frames = 0;
+    HRESULT hr = audio_client_->GetCurrentPadding(&padding_frames);
+    if (FAILED(hr)) return 0.0;
+
+    return static_cast<double>(padding_frames) / wave_format_->nSamplesPerSec;
+}
+
+double AudioOutput::getPlayedSeconds()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!audio_client_ || !wave_format_ || wave_format_->nSamplesPerSec == 0) return 0.0;
+
+    UINT32 padding_frames = 0;
+    HRESULT hr = audio_client_->GetCurrentPadding(&padding_frames);
+    if (FAILED(hr)) return 0.0;
+
+    unsigned long long submitted = submitted_frames_.load();
+    unsigned long long padding = padding_frames;
+    unsigned long long played = submitted > padding ? submitted - padding : 0;
+    return static_cast<double>(played) / wave_format_->nSamplesPerSec;
+}
+
+void AudioOutput::reset()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (audio_client_) {
+        audio_client_->Stop();
+        audio_client_->Reset();
+    }
+    playing_.store(false);
+    submitted_frames_.store(0);
 }
 
 void AudioOutput::setVolume(float volume)

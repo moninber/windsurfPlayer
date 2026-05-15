@@ -179,7 +179,13 @@ void PlayerController::playbackThread()
     double anchor_pts = current_time_.load();
     const int my_session = session_id_.load();
     float active_speed = std::max(0.25f, speed_.load());
-    const bool use_video_clock = decoder_->hasVideo();
+    bool audio_clock_active = false;
+    double audio_clock_base = current_time_.load();
+
+    auto get_audio_clock = [&]() -> double {
+        if (!audio_ready || !audio_clock_active) return current_time_.load();
+        return audio_clock_base + audio_output_->getPlayedSeconds() * active_speed;
+    };
 
     while (!stop_requested_ && playing_ && session_id_.load() == my_session) {
         if (paused_) {
@@ -195,12 +201,19 @@ void PlayerController::playbackThread()
 
         float requested_speed = std::max(0.25f, speed_.load());
         if (std::fabs(requested_speed - active_speed) > 0.001f) {
+            double sync_time = audio_clock_active ? get_audio_clock() : current_time_.load();
             if (!decoder_->setPlaybackSpeed(requested_speed)) {
                 std::cerr << "[Player] 更新播放速度失败: " << requested_speed << "x" << std::endl;
             }
             active_speed = requested_speed;
+            if (audio_ready) {
+                audio_output_->reset();
+                audio_paused = false;
+                audio_clock_active = false;
+            }
+            current_time_ = sync_time;
             playback_anchor = std::chrono::steady_clock::now();
-            anchor_pts = current_time_.load();
+            anchor_pts = sync_time;
         }
 
         if (audio_ready && audio_paused) {
@@ -214,8 +227,10 @@ void PlayerController::playbackThread()
             decoder_->seek(seek_seconds);
             //暂停是为了清空音频缓冲区，等待新数据就位，下次循环就会执行resume来播放
             if (audio_ready) {
+                audio_output_->reset();
                 audio_output_->pause();
                 audio_paused = true;
+                audio_clock_active = false;
             }
             current_time_ = seek_seconds;
             seek_requested_ = false;
@@ -235,19 +250,50 @@ void PlayerController::playbackThread()
         }
 
         if (frame.type == DecodedFrame::Type::Video) {
-            double target_delay = (frame.pts - anchor_pts) / active_speed;
-            if (target_delay > 0.0) {
-                auto target_time = playback_anchor + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                    std::chrono::duration<double>(target_delay));
-                while (!stop_requested_ && !paused_ && std::chrono::steady_clock::now() < target_time) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            bool display_frame = true;
+
+            if (audio_ready && audio_clock_active) {
+                constexpr double sync_threshold = 0.04;
+                constexpr double drop_threshold = 0.12;
+                constexpr double max_wait_seconds = 0.02;
+                constexpr double min_audio_queue_for_wait = 0.12;
+                constexpr double audio_queue_floor = 0.08;
+
+                double diff = frame.pts - get_audio_clock();
+                double queued_seconds = audio_output_->getQueuedSeconds();
+                if (diff > sync_threshold && queued_seconds > min_audio_queue_for_wait) {
+                    double wait_seconds = std::min(diff, max_wait_seconds);
+                    wait_seconds = std::min(wait_seconds, queued_seconds - audio_queue_floor);
+                    if (wait_seconds > 0.0) {
+                        auto wait_until = std::chrono::steady_clock::now() +
+                            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                std::chrono::duration<double>(wait_seconds));
+                        while (!stop_requested_ && !paused_ && std::chrono::steady_clock::now() < wait_until) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                        diff = frame.pts - get_audio_clock();
+                    }
+                }
+
+                if (diff < -drop_threshold) {
+                    display_frame = false;
+                }
+            }
+            else if (!audio_ready) {
+                double target_delay = (frame.pts - anchor_pts) / active_speed;
+                if (target_delay > 0.0) {
+                    auto target_time = playback_anchor + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double>(target_delay));
+                    while (!stop_requested_ && !paused_ && std::chrono::steady_clock::now() < target_time) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
                 }
             }
 
-            if (frame.data && video_widget_) {
+            if (display_frame && frame.data && video_widget_) {
                 video_widget_->setVideoFrame(frame.data, frame.width, frame.height);
             }
-            current_time_ = frame.pts;
+            current_time_ = (audio_ready && audio_clock_active) ? get_audio_clock() : frame.pts;
         }
         else if (frame.type == DecodedFrame::Type::Audio) {
             if (frame.data && frame.data_size > 0) {
@@ -261,9 +307,13 @@ void PlayerController::playbackThread()
                     }
                 }
 
+                bool audio_written = false;
                 if (audio_ready) {
                     if (!audio_output_->play(volume_data)) {
                         std::cerr << "[Player] 音频写入失败: " << frame.data_size << " bytes" << std::endl;
+                    }
+                    else {
+                        audio_written = true;
                     }
                 }
 
@@ -273,7 +323,14 @@ void PlayerController::playbackThread()
                     video_widget_->setSpectrumData(fft_calculator.getSpectrumData());
                 }
 
-                if (!use_video_clock) {
+                if (audio_written) {
+                    if (!audio_clock_active) {
+                        audio_clock_base = frame.pts;
+                        audio_clock_active = true;
+                    }
+                    current_time_ = get_audio_clock();
+                }
+                else if (!decoder_->hasVideo()) {
                     current_time_ = frame.pts;
                 }
             }

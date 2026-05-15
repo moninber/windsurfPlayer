@@ -81,6 +81,10 @@ public:
     /** @brief 是否正在播放 */
     bool isPlaying() const { return playing_.load(); }
 
+    double getPlayedSeconds();
+    double getQueuedSeconds();
+    void reset();
+
 private:
     // WASAPI COM接口指针
     IMMDeviceEnumerator* device_enumerator_;  // 设备枚举器（用于查找音频设备）
@@ -97,6 +101,7 @@ private:
     // 状态控制（使用原子变量，线程安全）
     std::atomic<float> volume_;                // 音量
     std::atomic<bool> playing_;                // 是否正在播放
+    std::atomic<unsigned long long> submitted_frames_;
     bool com_initialized_;                     // 是否由本对象初始化了COM
     UINT32 buffer_frame_count_;                // WASAPI缓冲区帧数（play()中限速用）
     std::mutex mutex_;                         // 互斥锁（保护WASAPI调用）
