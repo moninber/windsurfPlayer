@@ -35,6 +35,7 @@ set(MEDIASTUDIO_SOURCES
     VideoRenderer.cpp
     AudioVisualizer.cpp
     MediaTranscoder.cpp
+    PacketQueue.cpp
     PlayerController.cpp
     VideoWidget.cpp
     MainWindow.cpp
@@ -47,6 +48,7 @@ set(MEDIASTUDIO_HEADERS
     VideoRenderer.h
     AudioVisualizer.h
     MediaTranscoder.h
+    PacketQueue.h
     MediaDatabase.h
     PlayerController.h
     VideoWidget.h
