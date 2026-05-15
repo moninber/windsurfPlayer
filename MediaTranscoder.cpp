@@ -93,9 +93,26 @@ bool MediaTranscoder::transcode(
 
             // 打开视频解码器
             const AVCodec* dec_codec = avcodec_find_decoder(in_codecpar->codec_id);
+            if (!dec_codec) {
+                last_error_ = "找不到视频解码器: " + std::string(avcodec_get_name(in_codecpar->codec_id));
+                goto cleanup;
+            }
+
             video_dec_ctx = avcodec_alloc_context3(dec_codec);
-            avcodec_parameters_to_context(video_dec_ctx, in_codecpar);
-            avcodec_open2(video_dec_ctx, dec_codec, nullptr);
+            if (!video_dec_ctx) {
+                last_error_ = "无法分配视频解码器上下文";
+                goto cleanup;
+            }
+
+            if (avcodec_parameters_to_context(video_dec_ctx, in_codecpar) < 0) {
+                last_error_ = "无法复制视频解码参数";
+                goto cleanup;
+            }
+
+            if (avcodec_open2(video_dec_ctx, dec_codec, nullptr) < 0) {
+                last_error_ = "无法打开视频解码器: " + std::string(dec_codec->name);
+                goto cleanup;
+            }
 
             // 创建视频编码器
             const AVCodec* enc_codec = avcodec_find_encoder_by_name(video_codec.c_str());
@@ -109,6 +126,10 @@ bool MediaTranscoder::transcode(
             }
 
             video_enc_ctx = avcodec_alloc_context3(enc_codec);
+            if (!video_enc_ctx) {
+                last_error_ = "无法分配视频编码器上下文";
+                goto cleanup;
+            }
 
             // 设置编码参数
             int out_width = target_width > 0 ? target_width : video_dec_ctx->width;
@@ -162,7 +183,14 @@ bool MediaTranscoder::transcode(
 
             // 创建输出流
             AVStream* out_stream = avformat_new_stream(out_fmt_ctx, enc_codec);
-            avcodec_parameters_from_context(out_stream->codecpar, video_enc_ctx);
+            if (!out_stream) {
+                last_error_ = "无法创建视频输出流";
+                goto cleanup;
+            }
+            if (avcodec_parameters_from_context(out_stream->codecpar, video_enc_ctx) < 0) {
+                last_error_ = "无法复制视频编码参数到输出流";
+                goto cleanup;
+            }
             out_stream->time_base = video_enc_ctx->time_base;
             video_out_idx = out_stream->index;
 
@@ -179,9 +207,26 @@ bool MediaTranscoder::transcode(
 
             // 打开音频解码器
             const AVCodec* dec_codec = avcodec_find_decoder(in_codecpar->codec_id);
+            if (!dec_codec) {
+                last_error_ = "找不到音频解码器: " + std::string(avcodec_get_name(in_codecpar->codec_id));
+                goto cleanup;
+            }
+
             audio_dec_ctx = avcodec_alloc_context3(dec_codec);
-            avcodec_parameters_to_context(audio_dec_ctx, in_codecpar);
-            avcodec_open2(audio_dec_ctx, dec_codec, nullptr);
+            if (!audio_dec_ctx) {
+                last_error_ = "无法分配音频解码器上下文";
+                goto cleanup;
+            }
+
+            if (avcodec_parameters_to_context(audio_dec_ctx, in_codecpar) < 0) {
+                last_error_ = "无法复制音频解码参数";
+                goto cleanup;
+            }
+
+            if (avcodec_open2(audio_dec_ctx, dec_codec, nullptr) < 0) {
+                last_error_ = "无法打开音频解码器: " + std::string(dec_codec->name);
+                goto cleanup;
+            }
 
             // 创建音频编码器
             const AVCodec* enc_codec = avcodec_find_encoder_by_name(audio_codec.c_str());
@@ -194,6 +239,11 @@ bool MediaTranscoder::transcode(
             }
 
             audio_enc_ctx = avcodec_alloc_context3(enc_codec);
+            if (!audio_enc_ctx) {
+                last_error_ = "无法分配音频编码器上下文";
+                goto cleanup;
+            }
+
             audio_enc_ctx->sample_rate = audio_dec_ctx->sample_rate;
             audio_enc_ctx->bit_rate = audio_dec_ctx->bit_rate > 0 ? audio_dec_ctx->bit_rate : 128000;
 
@@ -220,7 +270,14 @@ bool MediaTranscoder::transcode(
             }
 
             AVStream* out_stream = avformat_new_stream(out_fmt_ctx, enc_codec);
-            avcodec_parameters_from_context(out_stream->codecpar, audio_enc_ctx);
+            if (!out_stream) {
+                last_error_ = "无法创建音频输出流";
+                goto cleanup;
+            }
+            if (avcodec_parameters_from_context(out_stream->codecpar, audio_enc_ctx) < 0) {
+                last_error_ = "无法复制音频编码参数到输出流";
+                goto cleanup;
+            }
             out_stream->time_base = audio_enc_ctx->time_base;
             audio_out_idx = out_stream->index;
 
