@@ -524,11 +524,181 @@ bool MediaDecoder::pullAudioFilterFrame(DecodedFrame& out_frame)
     out_frame.data_size = data_size;
     out_frame.pts = (filtered_frame->pts != AV_NOPTS_VALUE)
         ? (double)filtered_frame->pts / TARGET_SAMPLE_RATE
-        : current_time_;
+        : current_time_.load();
     current_time_ = out_frame.pts;
 
     av_frame_free(&filtered_frame);
     return true;
+}
+
+bool MediaDecoder::readPacket(AVPacket* packet)
+{
+    if (!format_ctx_ || !packet) {
+        return false;
+    }
+
+    av_packet_unref(packet);
+    while (true) {
+        int ret = av_read_frame(format_ctx_, packet);
+        if (ret < 0) {
+            return false;
+        }
+        if (isVideoPacket(packet) || isAudioPacket(packet)) {
+            return true;
+        }
+        av_packet_unref(packet);
+    }
+}
+
+bool MediaDecoder::isVideoPacket(const AVPacket* packet) const
+{
+    return packet && video_codec_ctx_ && packet->stream_index == video_stream_index_;
+}
+
+bool MediaDecoder::isAudioPacket(const AVPacket* packet) const
+{
+    return packet && audio_codec_ctx_ && packet->stream_index == audio_stream_index_;
+}
+
+bool MediaDecoder::decodeVideoPacket(const AVPacket* packet, std::vector<DecodedFrame>& out_frames)
+{
+    if (!video_codec_ctx_ || !packet) {
+        return false;
+    }
+
+    int ret = avcodec_send_packet(video_codec_ctx_, packet);
+    if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        return false;
+    }
+
+    receiveVideoFrames(out_frames);
+    return true;
+}
+
+bool MediaDecoder::decodeAudioPacket(const AVPacket* packet, std::vector<DecodedFrame>& out_frames)
+{
+    if (!audio_codec_ctx_ || !packet) {
+        return false;
+    }
+
+    DecodedFrame filtered_frame;
+    while (pullAudioFilterFrame(filtered_frame)) {
+        out_frames.push_back(filtered_frame);
+        filtered_frame = DecodedFrame();
+    }
+
+    int ret = avcodec_send_packet(audio_codec_ctx_, packet);
+    if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        return false;
+    }
+
+    receiveAudioFrames(out_frames);
+    while (pullAudioFilterFrame(filtered_frame)) {
+        out_frames.push_back(filtered_frame);
+        filtered_frame = DecodedFrame();
+    }
+    return true;
+}
+
+bool MediaDecoder::flushVideoDecoder(std::vector<DecodedFrame>& out_frames)
+{
+    if (!video_codec_ctx_) {
+        return false;
+    }
+
+    avcodec_send_packet(video_codec_ctx_, nullptr);
+    receiveVideoFrames(out_frames);
+    video_drained_ = true;
+    return true;
+}
+
+bool MediaDecoder::flushAudioDecoder(std::vector<DecodedFrame>& out_frames)
+{
+    if (!audio_codec_ctx_) {
+        return false;
+    }
+
+    DecodedFrame filtered_frame;
+    while (pullAudioFilterFrame(filtered_frame)) {
+        out_frames.push_back(filtered_frame);
+        filtered_frame = DecodedFrame();
+    }
+
+    avcodec_send_packet(audio_codec_ctx_, nullptr);
+    receiveAudioFrames(out_frames);
+
+    if (audio_buffer_src_ctx_ && !audio_filter_flush_sent_) {
+        av_buffersrc_add_frame_flags(audio_buffer_src_ctx_, nullptr, 0);
+        audio_filter_flush_sent_ = true;
+    }
+    while (pullAudioFilterFrame(filtered_frame)) {
+        out_frames.push_back(filtered_frame);
+        filtered_frame = DecodedFrame();
+    }
+
+    audio_decoder_drained_ = true;
+    audio_drained_ = true;
+    return true;
+}
+
+void MediaDecoder::receiveVideoFrames(std::vector<DecodedFrame>& out_frames)
+{
+    if (!video_codec_ctx_) {
+        return;
+    }
+
+    AVFrame* frame = av_frame_alloc();
+    if (!frame) {
+        return;
+    }
+
+    while (true) {
+        int ret = avcodec_receive_frame(video_codec_ctx_, frame);
+        if (ret == 0) {
+            DecodedFrame out_frame;
+            if (convertVideoFrame(frame, out_frame)) {
+                out_frames.push_back(out_frame);
+            }
+            av_frame_unref(frame);
+            continue;
+        }
+        if (ret == AVERROR_EOF) {
+            video_drained_ = true;
+        }
+        break;
+    }
+
+    av_frame_free(&frame);
+}
+
+void MediaDecoder::receiveAudioFrames(std::vector<DecodedFrame>& out_frames)
+{
+    if (!audio_codec_ctx_) {
+        return;
+    }
+
+    AVFrame* frame = av_frame_alloc();
+    if (!frame) {
+        return;
+    }
+
+    while (true) {
+        int ret = avcodec_receive_frame(audio_codec_ctx_, frame);
+        if (ret == 0) {
+            DecodedFrame out_frame;
+            if (convertAudioFrame(frame, out_frame)) {
+                out_frames.push_back(out_frame);
+            }
+            av_frame_unref(frame);
+            continue;
+        }
+        if (ret == AVERROR_EOF) {
+            audio_decoder_drained_ = true;
+        }
+        break;
+    }
+
+    av_frame_free(&frame);
 }
 
 // ============================================================
@@ -821,13 +991,13 @@ void MediaDecoder::seek(double seconds)
 double MediaDecoder::getFrameTimestampSeconds(AVFrame* frame, int stream_index) const
 {
     if (!frame || !format_ctx_ || stream_index < 0 || stream_index >= (int)format_ctx_->nb_streams) {
-        return current_time_;
+        return current_time_.load();
     }
 
     int64_t ts = frame->best_effort_timestamp;
     if (ts == AV_NOPTS_VALUE) ts = frame->pts;
     if (ts == AV_NOPTS_VALUE) ts = frame->pkt_dts;
-    if (ts == AV_NOPTS_VALUE) return current_time_;
+    if (ts == AV_NOPTS_VALUE) return current_time_.load();
 
     return ts * av_q2d(format_ctx_->streams[stream_index]->time_base);
 }

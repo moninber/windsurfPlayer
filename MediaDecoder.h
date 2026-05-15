@@ -24,8 +24,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <memory>
+#include <vector>
 #include "MediaInfo.h"
 
 // FFmpeg头文件使用extern "C"包裹，因为FFmpeg是C库
@@ -76,6 +78,13 @@ public:
     void close();
 
     bool decodeNextFrame(DecodedFrame& out_frame);
+    bool readPacket(AVPacket* packet);
+    bool isVideoPacket(const AVPacket* packet) const;
+    bool isAudioPacket(const AVPacket* packet) const;
+    bool decodeVideoPacket(const AVPacket* packet, std::vector<DecodedFrame>& out_frames);
+    bool decodeAudioPacket(const AVPacket* packet, std::vector<DecodedFrame>& out_frames);
+    bool flushVideoDecoder(std::vector<DecodedFrame>& out_frames);
+    bool flushAudioDecoder(std::vector<DecodedFrame>& out_frames);
 
     /**
      * @brief 跳转到指定时间位置
@@ -95,7 +104,7 @@ public:
     int getWidth() const { return media_info_.video_info.width; }
     int getHeight() const { return media_info_.video_info.height; }
     double getDuration() const { return media_info_.duration; }
-    double getCurrentTime() const { return current_time_; }
+    double getCurrentTime() const { return current_time_.load(); }
     double getFrameRate() const { return media_info_.video_info.frame_rate; }
     bool hasVideo() const { return media_info_.has_video; }
     bool hasAudio() const { return media_info_.has_audio; }
@@ -113,6 +122,8 @@ private:
     bool convertVideoFrame(AVFrame* frame, DecodedFrame& out_frame);
     bool convertAudioFrame(AVFrame* frame, DecodedFrame& out_frame);
     bool pullAudioFilterFrame(DecodedFrame& out_frame);
+    void receiveVideoFrames(std::vector<DecodedFrame>& out_frames);
+    void receiveAudioFrames(std::vector<DecodedFrame>& out_frames);
     bool initAudioFilterGraph();
     void destroyAudioFilterGraph();
     std::string buildAtempoFilterChain(float speed) const;
@@ -130,7 +141,7 @@ private:
     int video_stream_index_;         // 视频流索引（-1=无视频流）
     int audio_stream_index_;         // 音频流索引（-1=无音频流）
 
-    double current_time_;            // 当前播放时间（秒）
+    std::atomic<double> current_time_;            // 当前播放时间（秒）
     float playback_speed_;
     MediaInfo media_info_;           // 媒体文件信息
     bool eof_reached_;

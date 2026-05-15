@@ -4,6 +4,7 @@ PacketQueue::PacketQueue()
     : size_(0)
     , duration_(0)
     , abort_requested_(false)
+    , finished_(false)
 {
 }
 
@@ -25,7 +26,7 @@ bool PacketQueue::push(const AVPacket* packet)
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (abort_requested_) {
+    if (abort_requested_ || finished_) {
         av_packet_free(&copy);
         return false;
     }
@@ -44,12 +45,12 @@ bool PacketQueue::pop(AVPacket* packet, bool block)
     if (!packet) return false;
 
     std::unique_lock<std::mutex> lock(mutex_);
-    while (packets_.empty() && !abort_requested_) {
+    while (packets_.empty() && !abort_requested_ && !finished_) {
         if (!block) return false;
         condition_.wait(lock);
     }
 
-    if (abort_requested_) return false;
+    if (abort_requested_ || packets_.empty()) return false;
 
     AVPacket* front = packets_.front();
     packets_.pop();
@@ -74,6 +75,7 @@ void PacketQueue::abort()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         abort_requested_ = true;
+        finished_ = true;
         clearLocked();
     }
     condition_.notify_all();
@@ -84,7 +86,17 @@ void PacketQueue::reset()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         abort_requested_ = false;
+        finished_ = false;
         clearLocked();
+    }
+    condition_.notify_all();
+}
+
+void PacketQueue::finish()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        finished_ = true;
     }
     condition_.notify_all();
 }
@@ -111,6 +123,12 @@ bool PacketQueue::isAborted() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return abort_requested_;
+}
+
+bool PacketQueue::isFinished() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return finished_;
 }
 
 void PacketQueue::clearLocked()

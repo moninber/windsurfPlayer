@@ -21,6 +21,7 @@
 #include "MediaInfo.h"
 #include "MediaDecoder.h"
 #include "AudioOutput.h"
+#include "PacketQueue.h"
 
 class VideoWidget;  // 前向声明，避免头文件依赖
 
@@ -88,6 +89,8 @@ private:
     // 核心组件
     std::unique_ptr<MediaDecoder> decoder_;
     std::unique_ptr<AudioOutput> audio_output_;
+    PacketQueue audio_packets_;
+    PacketQueue video_packets_;
     VideoWidget* video_widget_;
 
     // 原子状态变量（线程安全，无需加锁）

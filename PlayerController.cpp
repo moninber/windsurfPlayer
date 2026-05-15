@@ -87,6 +87,8 @@ void PlayerController::play()
     playing_ = true;
     paused_ = false;
     stop_requested_ = false;
+    audio_packets_.reset();
+    video_packets_.reset();
     ++session_id_;   // 新session，旧线程会因sid不匹配而退出
 
     // 启动单播放线程
@@ -106,6 +108,9 @@ void PlayerController::stopAsync()
     paused_ = false;
     seek_requested_ = false;
     current_time_ = 0.0;
+    audio_packets_.abort();
+    video_packets_.abort();
+    audio_output_->reset();
 }
 
 void PlayerController::stop()
@@ -158,11 +163,7 @@ void PlayerController::togglePlayPause()
 // ============================================================
 void PlayerController::playbackThread()
 {
-    AudioVisualizer fft_calculator;
-    fft_calculator.init(64, false);
-
     bool audio_ready = false;
-    bool audio_paused = false;
     if (decoder_->hasAudio()) {
         audio_ready = audio_output_->init(decoder_->getOutputAudioSampleRate(), decoder_->getOutputAudioChannels());
         if (!audio_ready) {
@@ -175,146 +176,58 @@ void PlayerController::playbackThread()
         }
     }
 
-    auto playback_anchor = std::chrono::steady_clock::now();
-    double anchor_pts = current_time_.load();
     const int my_session = session_id_.load();
-    float active_speed = std::max(0.25f, speed_.load());
-    bool audio_clock_active = false;
-    double audio_clock_base = current_time_.load();
+    const bool use_audio_queue = decoder_->hasAudio() && audio_ready;
+    const bool use_video_queue = decoder_->hasVideo();
+    std::atomic<float> active_speed(std::max(0.25f, speed_.load()));
+    std::atomic<bool> audio_clock_active(false);
+    std::atomic<double> audio_clock_base(current_time_.load());
+    std::atomic<int> stream_generation(0);
 
     auto get_audio_clock = [&]() -> double {
-        if (!audio_ready || !audio_clock_active) return current_time_.load();
-        return audio_clock_base + audio_output_->getPlayedSeconds() * active_speed;
+        if (!audio_ready || !audio_clock_active.load()) return current_time_.load();
+        return audio_clock_base.load() + audio_output_->getPlayedSeconds() * active_speed.load();
     };
 
-    while (!stop_requested_ && playing_ && session_id_.load() == my_session) {
-        if (paused_) {
-            if (audio_ready && !audio_paused) {
-                audio_output_->pause();
-                audio_paused = true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            playback_anchor = std::chrono::steady_clock::now();
-            anchor_pts = current_time_.load();
-            continue;
+    auto is_running = [&]() -> bool {
+        return !stop_requested_ && playing_ && session_id_.load() == my_session;
+    };
+
+    auto release_frame = [](DecodedFrame& frame) {
+        if (frame.data) {
+            av_freep(&frame.data);
+            frame.data = nullptr;
         }
+    };
 
-        float requested_speed = std::max(0.25f, speed_.load());
-        if (std::fabs(requested_speed - active_speed) > 0.001f) {
-            double sync_time = audio_clock_active ? get_audio_clock() : current_time_.load();
-            if (!decoder_->setPlaybackSpeed(requested_speed)) {
-                std::cerr << "[Player] 更新播放速度失败: " << requested_speed << "x" << std::endl;
-            }
-            active_speed = requested_speed;
-            if (audio_ready) {
-                audio_output_->reset();
-                audio_paused = false;
-                audio_clock_active = false;
-            }
-            current_time_ = sync_time;
-            playback_anchor = std::chrono::steady_clock::now();
-            anchor_pts = sync_time;
-        }
+    std::thread audio_thread;
+    if (use_audio_queue) {
+        audio_thread = std::thread([&, my_session]() {
+            AudioVisualizer fft_calculator;
+            fft_calculator.init(64, false);
+            bool audio_paused = false;
+            AVPacket* packet = av_packet_alloc();
+            if (!packet) return;
 
-        if (audio_ready && audio_paused) {
-            audio_output_->resume();
-            audio_paused = false;
-        }
+            auto process_audio_frame = [&](DecodedFrame& frame, int frame_generation) {
+                if (!frame.data || frame.data_size <= 0) return;
 
-        if (seek_requested_) {
-            std::lock_guard<std::mutex> lock(seek_mutex_);
-            double seek_seconds = pending_seek_seconds_.load();
-            decoder_->seek(seek_seconds);
-            //暂停是为了清空音频缓冲区，等待新数据就位，下次循环就会执行resume来播放
-            if (audio_ready) {
-                audio_output_->reset();
-                audio_output_->pause();
-                audio_paused = true;
-                audio_clock_active = false;
-            }
-            current_time_ = seek_seconds;
-            seek_requested_ = false;
-            decoder_->setPlaybackSpeed(active_speed);
-            playback_anchor = std::chrono::steady_clock::now();
-            anchor_pts = seek_seconds;
-        }
-
-        DecodedFrame frame;
-
-        {
-            std::lock_guard<std::mutex> lock(seek_mutex_);
-            if (!decoder_->decodeNextFrame(frame)) {
-                playing_ = false;
-                break;
-            }
-        }
-
-        if (frame.type == DecodedFrame::Type::Video) {
-            bool display_frame = true;
-
-            if (audio_ready && audio_clock_active) {
-                constexpr double sync_threshold = 0.04;
-                constexpr double drop_threshold = 0.12;
-                constexpr double max_wait_seconds = 0.02;
-                constexpr double min_audio_queue_for_wait = 0.12;
-                constexpr double audio_queue_floor = 0.08;
-
-                double diff = frame.pts - get_audio_clock();
-                double queued_seconds = audio_output_->getQueuedSeconds();
-                if (diff > sync_threshold && queued_seconds > min_audio_queue_for_wait) {
-                    double wait_seconds = std::min(diff, max_wait_seconds);
-                    wait_seconds = std::min(wait_seconds, queued_seconds - audio_queue_floor);
-                    if (wait_seconds > 0.0) {
-                        auto wait_until = std::chrono::steady_clock::now() +
-                            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                std::chrono::duration<double>(wait_seconds));
-                        while (!stop_requested_ && !paused_ && std::chrono::steady_clock::now() < wait_until) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
-                        diff = frame.pts - get_audio_clock();
-                    }
-                }
-
-                if (diff < -drop_threshold) {
-                    display_frame = false;
-                }
-            }
-            else if (!audio_ready) {
-                double target_delay = (frame.pts - anchor_pts) / active_speed;
-                if (target_delay > 0.0) {
-                    auto target_time = playback_anchor + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                        std::chrono::duration<double>(target_delay));
-                    while (!stop_requested_ && !paused_ && std::chrono::steady_clock::now() < target_time) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
-                }
-            }
-
-            if (display_frame && frame.data && video_widget_) {
-                video_widget_->setVideoFrame(frame.data, frame.width, frame.height);
-            }
-            current_time_ = (audio_ready && audio_clock_active) ? get_audio_clock() : frame.pts;
-        }
-        else if (frame.type == DecodedFrame::Type::Audio) {
-            if (frame.data && frame.data_size > 0) {
                 std::vector<uint8_t> volume_data(frame.data, frame.data + frame.data_size);
-
-                if (volume_ < 1.0f) {
+                float current_volume = volume_.load();
+                if (current_volume < 1.0f) {
                     int16_t* pcm = (int16_t*)volume_data.data();
                     int sample_count = frame.data_size / 2;
                     for (int i = 0; i < sample_count; i++) {
-                        pcm[i] = (int16_t)(pcm[i] * volume_);
+                        pcm[i] = (int16_t)(pcm[i] * current_volume);
                     }
                 }
 
                 bool audio_written = false;
-                if (audio_ready) {
-                    if (!audio_output_->play(volume_data)) {
-                        std::cerr << "[Player] 音频写入失败: " << frame.data_size << " bytes" << std::endl;
-                    }
-                    else {
-                        audio_written = true;
-                    }
+                if (audio_output_->play(volume_data)) {
+                    audio_written = true;
+                }
+                else if (is_running()) {
+                    std::cerr << "[Player] 音频写入失败: " << frame.data_size << " bytes" << std::endl;
                 }
 
                 if (video_widget_ && show_visualizer_) {
@@ -323,23 +236,289 @@ void PlayerController::playbackThread()
                     video_widget_->setSpectrumData(fft_calculator.getSpectrumData());
                 }
 
-                if (audio_written) {
-                    if (!audio_clock_active) {
-                        audio_clock_base = frame.pts;
-                        audio_clock_active = true;
+                if (audio_written && frame_generation == stream_generation.load()) {
+                    if (!audio_clock_active.load()) {
+                        audio_clock_base.store(frame.pts);
+                        audio_clock_active.store(true);
                     }
                     current_time_ = get_audio_clock();
                 }
-                else if (!decoder_->hasVideo()) {
-                    current_time_ = frame.pts;
+            };
+
+            while (is_running()) {
+                if (paused_) {
+                    if (!audio_paused) {
+                        audio_output_->pause();
+                        audio_paused = true;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
                 }
+
+                if (audio_paused) {
+                    audio_output_->resume();
+                    audio_paused = false;
+                }
+
+                if (!audio_packets_.pop(packet, true)) {
+                    if (audio_packets_.isFinished() && !audio_packets_.isAborted()) {
+                        std::vector<DecodedFrame> frames;
+                        {
+                            std::lock_guard<std::mutex> lock(seek_mutex_);
+                            decoder_->flushAudioDecoder(frames);
+                        }
+                        int frame_generation = stream_generation.load();
+                        for (auto& frame : frames) {
+                            if (!is_running() || frame_generation != stream_generation.load()) {
+                                release_frame(frame);
+                                continue;
+                            }
+                            process_audio_frame(frame, frame_generation);
+                            release_frame(frame);
+                        }
+                    }
+                    break;
+                }
+
+                int packet_generation = stream_generation.load();
+                std::vector<DecodedFrame> frames;
+                {
+                    std::lock_guard<std::mutex> lock(seek_mutex_);
+                    if (packet_generation == stream_generation.load() && !seek_requested_) {
+                        decoder_->decodeAudioPacket(packet, frames);
+                    }
+                }
+                av_packet_unref(packet);
+
+                if (packet_generation != stream_generation.load() || seek_requested_) {
+                    for (auto& frame : frames) release_frame(frame);
+                    continue;
+                }
+
+                for (auto& frame : frames) {
+                    if (!is_running() || packet_generation != stream_generation.load()) {
+                        release_frame(frame);
+                        continue;
+                    }
+                    process_audio_frame(frame, packet_generation);
+                    release_frame(frame);
+                }
+            }
+
+            av_packet_free(&packet);
+        });
+    }
+
+    std::thread video_thread;
+    if (use_video_queue) {
+        video_thread = std::thread([&, my_session]() {
+            AVPacket* packet = av_packet_alloc();
+            if (!packet) return;
+
+            auto playback_anchor = std::chrono::steady_clock::now();
+            double anchor_pts = current_time_.load();
+            int local_generation = stream_generation.load();
+
+            auto reset_video_anchor = [&]() {
+                playback_anchor = std::chrono::steady_clock::now();
+                anchor_pts = current_time_.load();
+                local_generation = stream_generation.load();
+            };
+
+            auto wait_until_time = [&](std::chrono::steady_clock::time_point target_time) {
+                while (is_running() && !paused_ && std::chrono::steady_clock::now() < target_time) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            };
+
+            auto process_video_frame = [&](DecodedFrame& frame) {
+                bool display_frame = true;
+
+                if (audio_ready && audio_clock_active.load()) {
+                    constexpr double sync_threshold = 0.04;
+                    constexpr double drop_threshold = 0.12;
+
+                    double diff = frame.pts - get_audio_clock();
+                    while (is_running() && !paused_ && diff > sync_threshold) {
+                        double wait_seconds = std::min(diff, 0.01);
+                        std::this_thread::sleep_for(std::chrono::duration<double>(wait_seconds));
+                        diff = frame.pts - get_audio_clock();
+                    }
+
+                    if (diff < -drop_threshold) {
+                        display_frame = false;
+                    }
+                }
+                else if (!audio_ready) {
+                    if (local_generation != stream_generation.load()) {
+                        reset_video_anchor();
+                    }
+
+                    double target_delay = (frame.pts - anchor_pts) / active_speed.load();
+                    if (target_delay > 0.0) {
+                        auto target_time = playback_anchor + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(target_delay));
+                        wait_until_time(target_time);
+                    }
+                }
+
+                if (display_frame && frame.data && video_widget_ && is_running() && !paused_) {
+                    video_widget_->setVideoFrame(frame.data, frame.width, frame.height);
+                }
+                current_time_ = (audio_ready && audio_clock_active.load()) ? get_audio_clock() : frame.pts;
+            };
+
+            while (is_running()) {
+                if (paused_) {
+                    reset_video_anchor();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                if (local_generation != stream_generation.load()) {
+                    reset_video_anchor();
+                }
+
+                if (!video_packets_.pop(packet, true)) {
+                    if (video_packets_.isFinished() && !video_packets_.isAborted()) {
+                        std::vector<DecodedFrame> frames;
+                        {
+                            std::lock_guard<std::mutex> lock(seek_mutex_);
+                            decoder_->flushVideoDecoder(frames);
+                        }
+                        int frame_generation = stream_generation.load();
+                        for (auto& frame : frames) {
+                            if (!is_running() || frame_generation != stream_generation.load()) {
+                                release_frame(frame);
+                                continue;
+                            }
+                            process_video_frame(frame);
+                            release_frame(frame);
+                        }
+                    }
+                    break;
+                }
+
+                int packet_generation = stream_generation.load();
+                std::vector<DecodedFrame> frames;
+                {
+                    std::lock_guard<std::mutex> lock(seek_mutex_);
+                    if (packet_generation == stream_generation.load() && !seek_requested_) {
+                        decoder_->decodeVideoPacket(packet, frames);
+                    }
+                }
+                av_packet_unref(packet);
+
+                if (packet_generation != stream_generation.load() || seek_requested_) {
+                    for (auto& frame : frames) release_frame(frame);
+                    continue;
+                }
+
+                for (auto& frame : frames) {
+                    if (!is_running() || packet_generation != stream_generation.load()) {
+                        release_frame(frame);
+                        continue;
+                    }
+                    process_video_frame(frame);
+                    release_frame(frame);
+                }
+            }
+
+            av_packet_free(&packet);
+        });
+    }
+
+    AVPacket* packet = av_packet_alloc();
+    while (packet && is_running()) {
+        if (seek_requested_) {
+            double seek_seconds = pending_seek_seconds_.load();
+            stream_generation.fetch_add(1);
+            audio_packets_.reset();
+            video_packets_.reset();
+            audio_clock_active.store(false);
+            if (audio_ready) {
+                audio_output_->reset();
+            }
+            {
+                std::lock_guard<std::mutex> lock(seek_mutex_);
+                decoder_->seek(seek_seconds);
+                decoder_->setPlaybackSpeed(active_speed.load());
+            }
+            current_time_ = seek_seconds;
+            seek_requested_ = false;
+            continue;
+        }
+
+        float requested_speed = std::max(0.25f, speed_.load());
+        if (std::fabs(requested_speed - active_speed.load()) > 0.001f) {
+            double sync_time = audio_clock_active.load() ? get_audio_clock() : current_time_.load();
+            stream_generation.fetch_add(1);
+            audio_clock_active.store(false);
+            if (audio_ready) {
+                audio_output_->reset();
+            }
+            {
+                std::lock_guard<std::mutex> lock(seek_mutex_);
+                if (!decoder_->setPlaybackSpeed(requested_speed)) {
+                    std::cerr << "[Player] 更新播放速度失败: " << requested_speed << "x" << std::endl;
+                }
+            }
+            active_speed.store(requested_speed);
+            current_time_ = sync_time;
+            continue;
+        }
+
+        if (paused_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        if ((use_audio_queue && audio_packets_.size() > 80) ||
+            (use_video_queue && video_packets_.size() > 80)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        bool got_packet = false;
+        bool is_audio_packet = false;
+        bool is_video_packet = false;
+        {
+            std::lock_guard<std::mutex> lock(seek_mutex_);
+            got_packet = decoder_->readPacket(packet);
+            if (got_packet) {
+                is_audio_packet = decoder_->isAudioPacket(packet);
+                is_video_packet = decoder_->isVideoPacket(packet);
             }
         }
 
-        if (frame.data) {
-            av_freep(&frame.data);
+        if (!got_packet) {
+            break;
         }
+
+        if (is_audio_packet && use_audio_queue) {
+            audio_packets_.push(packet);
+        }
+        else if (is_video_packet && use_video_queue) {
+            video_packets_.push(packet);
+        }
+        av_packet_unref(packet);
     }
+
+    if (packet) {
+        av_packet_free(&packet);
+    }
+
+    if (stop_requested_ || session_id_.load() != my_session) {
+        audio_packets_.abort();
+        video_packets_.abort();
+    }
+    else {
+        audio_packets_.finish();
+        video_packets_.finish();
+    }
+
+    if (audio_thread.joinable()) audio_thread.join();
+    if (video_thread.joinable()) video_thread.join();
 
     if (audio_ready) {
         audio_output_->cleanup();
