@@ -30,7 +30,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 | 线程 | 职责 | 关键组件 |
 |------|------|---------|
 | Qt主线程 | GUI渲染、OpenGL绘制、用户输入 | QApplication事件循环 |
-| demux/control 线程 | 读包分发、seek/变速处理、队列流控 | PlayerController::playbackThread() 主循环 |
+| demux/control 线程 | 读包分发、seek/变速处理、队列流控、运行时统计 | PlayerController::playbackThread() 主循环 |
 | 音频工作线程 | 解码音频、WASAPI播放、音频主时钟 | std::thread + audio_packets_ + AudioOutput |
 | 视频工作线程 | 解码视频、音视频同步、OpenGL渲染 | std::thread + video_packets_ + VideoWidget |
 | 异步加载线程 | 文件打开、解码器初始化 | std::thread(detach) |
@@ -40,6 +40,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - **generation 机制（车次号）**：seek/变速时换车次，旧车次的包被丢弃
 - **音频主时钟**：WASAPI 播放进度作为时间基准，视频根据音频时钟同步
 - **PacketQueue**：线程安全的 AVPacket 队列，支持阻塞等待和终止标志
+- **运行时统计**：状态栏实时显示渲染 FPS、解码 FPS、A/V diff、丢帧数、队列长度和音频缓冲
 
 ## 二、技术栈
 
@@ -69,6 +70,8 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 2. `seek` 或改变倍速时重新初始化滤波图，保证输入格式与 `SwrContext` 输出一致。
 3. `setPlaybackSpeed(1.0f)` 时短路 bypass filter，直接走原始 `swr_convert` 重采样路径。
 4. 音频解码线程中优先处理音频帧，防止因视频帧阻塞导致音频 starvation。
+
+**补充现状**：变速切换已改为先等旧缓冲排空，再切到新速度，以减轻切速瞬间的快进感。
 
 ### 3.2 切换第二个视频后播放卡顿（1-2 fps）
 
@@ -113,6 +116,8 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 
 **注意**：该 workaround 仍未彻底根除偶发卡顿，需要进一步排查根本原因。
 
+**后续建议**：继续观察 `AudioOutput` 的缓冲时机和切换行为即可。
+
 ### 3.3 倍速时播放时间跳动
 
 **症状**：播放速度不为 1.0x 时，时间显示在音频/视频 PTS 之间跳动。
@@ -123,6 +128,8 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 **修复内容**：
 - **PlayerController.cpp**：优先使用视频时钟更新时间，仅在没有视频时使用音频时钟。
 - 代码逻辑：`const bool use_video_clock = decoder_->hasVideo();`，根据此标志选择时间源。
+
+**补充说明**：状态栏会显示 `A/V diff`、FPS、队列长度和音频缓冲，便于快速判断同步压力。
 
 ### 3.4 键盘快捷键失效（Space, Up, Down, F）
 
@@ -292,7 +299,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - 重构 `playbackThread()` 为 demux/control 主循环：
   - 读取压缩包并分发到对应队列
   - seek 处理：清空队列 + `decoder_->seek()`
-  - 变速处理：换车次 + 重置音频时钟 + `setPlaybackSpeed()`
+  - 变速处理：等待旧缓冲排空后再切速，再更新 `setPlaybackSpeed()`
   - 队列流控：超过 80 个包时休眠
 - 新增音频工作线程：
   - 从 `audio_packets_` 取包
@@ -325,7 +332,16 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - 视频帧根据音频主时钟等待/丢帧
 - 纯音频文件用墙时钟同步
 
-#### F. AudioOutput 扩展
+#### F. 播放调试统计
+
+**设计**：
+- 渲染 FPS：最近约 1 秒内实际送入 `VideoWidget` 的显示帧率
+- 解码 FPS：最近约 1 秒内实际解出的视频帧率
+- A/V diff：当前视频帧 PTS 与音频时钟的毫秒差值
+- 丢帧总数：因视频落后音频过多而主动跳过的帧累计数
+- 队列快照：当前音频/视频 packet 数量，以及 WASAPI 缓冲时长
+
+#### G. AudioOutput 扩展
 
 **文件**：`AudioOutput.h` / `AudioOutput.cpp`
 
@@ -333,7 +349,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - 新增 `getQueuedSeconds()` - 获取队列秒数
 - 新增 `reset()` - 重置缓冲区
 
-#### G. CMake 构建更新
+#### H. CMake 构建更新
 
 **文件**：`CMakeLists.txt`
 

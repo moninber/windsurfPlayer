@@ -313,6 +313,8 @@ void MainWindow::setupBottomBar()
     bottom_layout->addLayout(progress_layout);
 
     // 状态栏
+    label_debug_stats_ = new QLabel("FPS -- | A/V -- ms | Drop -- | A -- / V -- | Buf -- ms");
+    statusBar()->addPermanentWidget(label_debug_stats_);
     statusBar()->showMessage("就绪 - 拖放或打开文件开始播放");
 
     // 将视频和底部栏组合为中央部件
@@ -828,10 +830,22 @@ void MainWindow::playlistItemDoubleClicked(QListWidgetItem* item)
 
 void MainWindow::updatePlaybackInfo()
 {
-    if (!player_->isPlaying() && !player_->isPaused()) return;
+    if (!player_->isPlaying() && !player_->isPaused()) {
+        label_debug_stats_->setText("FPS -- | A/V -- ms | Drop -- | A -- / V -- | Buf -- ms");
+        return;
+    }
 
     double current = player_->getCurrentTime();
     double duration = player_->getDuration();
+    PlaybackStats stats = player_->getPlaybackStats();
+    label_debug_stats_->setText(QString("FPS %1/%2 | A/V %3 ms | Drop %4 | A %5 / V %6 | Buf %7 ms")
+        .arg(stats.render_fps, 0, 'f', 1)
+        .arg(stats.decode_fps, 0, 'f', 1)
+        .arg(stats.av_diff_ms, 0, 'f', 0)
+        .arg(stats.dropped_frames_total)
+        .arg(stats.audio_queue_packets)
+        .arg(stats.video_queue_packets)
+        .arg(stats.audio_buffer_seconds * 1000.0, 0, 'f', 0));
 
     if (duration > 0) {
         // 避免在用户拖动进度条时更新

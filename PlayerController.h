@@ -25,6 +25,16 @@
 
 class VideoWidget;  // 前向声明，避免头文件依赖
 
+struct PlaybackStats {
+    double render_fps = 0.0;
+    double decode_fps = 0.0;
+    double av_diff_ms = 0.0;
+    int dropped_frames_total = 0;
+    int audio_queue_packets = 0;
+    int video_queue_packets = 0;
+    double audio_buffer_seconds = 0.0;
+};
+
 class PlayerController {
 public:
     PlayerController();
@@ -68,6 +78,7 @@ public:
     double getDuration() const { return duration_.load(); }
     float getVolume() const { return volume_.load(); }
     float getSpeed() const { return speed_.load(); }
+    PlaybackStats getPlaybackStats() const;
     VideoEffect getEffect() const { return current_effect_; }
     const MediaInfo& getMediaInfo() const { return media_info_; }
     void setMediaInfo(const MediaInfo& info) { media_info_ = info; }
@@ -104,6 +115,10 @@ private:
     std::atomic<float> speed_;
     std::atomic<bool> seek_requested_;
     std::atomic<double> pending_seek_seconds_;
+    std::atomic<double> render_fps_;
+    std::atomic<double> decode_fps_;
+    std::atomic<double> av_diff_ms_;
+    std::atomic<int> dropped_frames_total_;
 
     // 线程控制
     std::thread playback_thread_;

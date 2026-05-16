@@ -86,7 +86,7 @@ PlayerController (状态管理)
 │  - decoder_->readPacket() (读取 AVPacket)                      │
 │  - 判断音频/视频流，分发到对应队列                               │
 │  - seek 处理：清空队列 + decoder_->seek()                      │
-│  - 变速处理：换车次 + 重置音频时钟 + setPlaybackSpeed()         │
+│  - 变速处理：等待旧缓冲排空后再切速，再更新 setPlaybackSpeed() │
 │  - 队列流控：队列超过 80 个包时休眠                              │
 ├─────────────────────────────────────────────────────────────┤
 │                  音频工作线程 (Audio Worker)                     │
@@ -125,6 +125,10 @@ PlayerController (状态管理)
 - **时钟计算**：`audio_clock_base + playedSeconds * active_speed`
 - **视频同步**：视频帧根据音频主时钟等待/丢帧
 - **纯音频文件**：使用墙时钟同步（`playback_anchor` + `anchor_pts`）
+
+#### 关键设计：播放调试信息
+
+播放器状态栏会显示一组轻量统计：渲染 FPS、解码 FPS、A/V diff、丢帧总数、音频/视频队列和音频缓冲。它们主要用于快速判断是解码、同步还是输出侧出现压力。
 
 #### 与单线程版本对比
 
@@ -1013,5 +1017,3 @@ Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, Qt6OpenGLWidgets.dll                   
 | 状态机  | `PlayerController` (playing/paused/stopped) | 播放生命周期管理            |
 | 命令队列 | `MainWindow::requestLoadAndPlay()`          | 异步操作序列化、去重          |
 | 观察者  | Qt 信号槽机制                                    | UI 与逻辑解耦            |
-
-

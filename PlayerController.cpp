@@ -29,6 +29,10 @@ PlayerController::PlayerController()
     , speed_(1.0f)
     , seek_requested_(false)
     , pending_seek_seconds_(0.0)
+    , render_fps_(0.0)
+    , decode_fps_(0.0)
+    , av_diff_ms_(0.0)
+    , dropped_frames_total_(0)
     , current_effect_(VideoEffect::None)
     , show_visualizer_(false)
 {
@@ -146,6 +150,19 @@ void PlayerController::setEffect(VideoEffect effect)
     current_effect_ = effect;
 }
 
+PlaybackStats PlayerController::getPlaybackStats() const
+{
+    PlaybackStats stats;
+    stats.render_fps = render_fps_.load();
+    stats.decode_fps = decode_fps_.load();
+    stats.av_diff_ms = av_diff_ms_.load();
+    stats.dropped_frames_total = dropped_frames_total_.load();
+    stats.audio_queue_packets = audio_packets_.size();
+    stats.video_queue_packets = video_packets_.size();
+    stats.audio_buffer_seconds = audio_output_->getQueuedSeconds();
+    return stats;
+}
+
 void PlayerController::togglePlayPause()
 {
     if (playing_ && !paused_) {
@@ -163,6 +180,11 @@ void PlayerController::togglePlayPause()
 // ============================================================
 void PlayerController::playbackThread()
 {
+    render_fps_.store(0.0);
+    decode_fps_.store(0.0);
+    av_diff_ms_.store(0.0);
+    dropped_frames_total_.store(0);
+
     bool audio_ready = false;
     if (decoder_->hasAudio()) {
         audio_ready = audio_output_->init(decoder_->getOutputAudioSampleRate(), decoder_->getOutputAudioChannels());
@@ -325,6 +347,9 @@ void PlayerController::playbackThread()
             auto playback_anchor = std::chrono::steady_clock::now();
             double anchor_pts = current_time_.load();
             int local_generation = stream_generation.load();
+            auto stats_window_start = std::chrono::steady_clock::now();
+            int decoded_frames_window = 0;
+            int rendered_frames_window = 0;
 
             auto reset_video_anchor = [&]() {
                 playback_anchor = std::chrono::steady_clock::now();
@@ -346,6 +371,7 @@ void PlayerController::playbackThread()
                     constexpr double drop_threshold = 0.12;
 
                     double diff = frame.pts - get_audio_clock();
+                    av_diff_ms_.store(diff * 1000.0);
                     while (is_running() && !paused_ && diff > sync_threshold) {
                         double wait_seconds = std::min(diff, 0.01);
                         std::this_thread::sleep_for(std::chrono::duration<double>(wait_seconds));
@@ -354,6 +380,7 @@ void PlayerController::playbackThread()
 
                     if (diff < -drop_threshold) {
                         display_frame = false;
+                        dropped_frames_total_.fetch_add(1);
                     }
                 }
                 else if (!audio_ready) {
@@ -371,8 +398,19 @@ void PlayerController::playbackThread()
 
                 if (display_frame && frame.data && video_widget_ && is_running() && !paused_) {
                     video_widget_->setVideoFrame(frame.data, frame.width, frame.height);
+                    ++rendered_frames_window;
                 }
                 current_time_ = (audio_ready && audio_clock_active.load()) ? get_audio_clock() : frame.pts;
+
+                auto now = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(now - stats_window_start).count();
+                if (elapsed >= 1.0) {
+                    render_fps_.store(rendered_frames_window / elapsed);
+                    decode_fps_.store(decoded_frames_window / elapsed);
+                    rendered_frames_window = 0;
+                    decoded_frames_window = 0;
+                    stats_window_start = now;
+                }
             };
 
             while (is_running()) {
@@ -415,6 +453,7 @@ void PlayerController::playbackThread()
                     }
                 }
                 av_packet_unref(packet);
+                decoded_frames_window += static_cast<int>(frames.size());
 
                 if (packet_generation != stream_generation.load() || seek_requested_) {
                     for (auto& frame : frames) release_frame(frame);

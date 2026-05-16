@@ -128,6 +128,7 @@ private:
     QSlider* slider_volume_;
     QLabel* label_time_;
     QLabel* label_duration_;
+    QLabel* label_debug_stats_;
     QComboBox* combo_speed_;
     QListWidget* list_playlist_;
     QTextEdit* text_media_info_;
