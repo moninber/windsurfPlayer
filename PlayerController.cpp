@@ -180,6 +180,7 @@ void PlayerController::playbackThread()
     const bool use_audio_queue = decoder_->hasAudio() && audio_ready;
     const bool use_video_queue = decoder_->hasVideo();
     std::atomic<float> active_speed(std::max(0.25f, speed_.load()));
+    std::atomic<bool> speed_change_pending(false);
     std::atomic<bool> audio_clock_active(false);
     std::atomic<double> audio_clock_base(current_time_.load());
     std::atomic<int> stream_generation(0);
@@ -258,6 +259,12 @@ void PlayerController::playbackThread()
                 if (audio_paused) {
                     audio_output_->resume();
                     audio_paused = false;
+                }
+
+                // 先让声卡里已经提交的旧速率音频自然排空，再切到新速率。
+                if (speed_change_pending.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    continue;
                 }
 
                 if (!audio_packets_.pop(packet, true)) {
@@ -451,6 +458,14 @@ void PlayerController::playbackThread()
 
         float requested_speed = std::max(0.25f, speed_.load());
         if (std::fabs(requested_speed - active_speed.load()) > 0.001f) {
+            speed_change_pending.store(true);
+
+            constexpr double speed_switch_queue_threshold = 0.05;
+            if (audio_ready && audio_output_->getQueuedSeconds() > speed_switch_queue_threshold) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+
             double sync_time = audio_clock_active.load() ? get_audio_clock() : current_time_.load();
             stream_generation.fetch_add(1);
             audio_clock_active.store(false);
@@ -464,8 +479,12 @@ void PlayerController::playbackThread()
                 }
             }
             active_speed.store(requested_speed);
+            speed_change_pending.store(false);
             current_time_ = sync_time;
             continue;
+        }
+        else if (speed_change_pending.load()) {
+            speed_change_pending.store(false);
         }
 
         if (paused_) {

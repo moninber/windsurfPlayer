@@ -25,15 +25,21 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 └─────────────┴──────────────┴───────────────────────────────┘
 ```
 
-### 1.2 线程模型
+### 1.2 线程模型（第三步多线程重构）
 
 | 线程 | 职责 | 关键组件 |
 |------|------|---------|
 | Qt主线程 | GUI渲染、OpenGL绘制、用户输入 | QApplication事件循环 |
-| 播放线程 (1个) | 顺序解复用→解码→音频输出→视频帧推送 | PlayerController::playbackThread |
+| demux/control 线程 | 读包分发、seek/变速处理、队列流控 | PlayerController::playbackThread() 主循环 |
+| 音频工作线程 | 解码音频、WASAPI播放、音频主时钟 | std::thread + audio_packets_ + AudioOutput |
+| 视频工作线程 | 解码视频、音视频同步、OpenGL渲染 | std::thread + video_packets_ + VideoWidget |
 | 异步加载线程 | 文件打开、解码器初始化 | std::thread(detach) |
 
-**关键设计**：单线程播放循环（非多线程解码），用 `session_id_` 原子变量区分新旧播放会话，旧线程检测到会话过期自动退出。
+**关键设计**：
+- **三线程播放架构**：demux/control 线程读包分发，音频/视频线程并行解码
+- **generation 机制（车次号）**：seek/变速时换车次，旧车次的包被丢弃
+- **音频主时钟**：WASAPI 播放进度作为时间基准，视频根据音频时钟同步
+- **PacketQueue**：线程安全的 AVPacket 队列，支持阻塞等待和终止标志
 
 ## 二、技术栈
 
@@ -45,8 +51,8 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 | 视频渲染 | OpenGL 3.3 Core Profile | GLSL着色器、VAO/VBO纹理上传 |
 | OpenGL加载 | GLEW 2.3.1 | 扩展函数指针管理 |
 | 音频播放 | WASAPI (Windows) | `IAudioClient` / `IAudioRenderClient`, 共享模式, 16-bit PCM |
-| 数据库 | MySQL 8.0 + Connector/C++ | `PreparedStatement`, 事务 |
-| 构建系统 | VS2022 MSVC v143 | x64, C++17标准 |
+| 数据库 | MariaDB/MySQL 8.0 C API | `mysql_real_connect`, `mysql_query`, `MYSQL*` |
+| 构建系统 | CMake + Ninja + MinGW 13.1.0 | x64, C++17标准 |
 ## 三、核心 Bug 修复与修改记录（完整历史）
 
 ### 3.1 播放倍速 >1.0x 时音频失速/失音
@@ -249,7 +255,115 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 - **同步工程配置**：清理了 `.vcxproj` 和 `.filters` 中的失效引用。
 - **修复逻辑中断**：修复了 `updatePlaybackInfo` 中因编辑错误导致的变量未定义和语法崩溃。
 
-### 3.12 当前已知问题与下一步方向
+### 3.12 第三步多线程播放架构重构
+
+**背景**：为提升播放性能和音视频同步稳定性，将单线程播放循环重构为三线程架构。
+
+**改动内容**：
+
+#### A. 新增 PacketQueue 线程安全队列
+
+**文件**：`PacketQueue.h` / `PacketQueue.cpp`
+
+- 新增线程安全的 AVPacket 队列
+- 支持 `push()`/`pop()` 阻塞等待
+- 支持 `abort()`/`finish()` 终止标志
+- 支持队列流控（超过 80 个包时休眠）
+
+#### B. MediaDecoder 接口拆分
+
+**文件**：`MediaDecoder.h` / `MediaDecoder.cpp`
+
+- 新增分离接口：
+  - `readPacket()` - 读取压缩包
+  - `isAudioPacket()` / `isVideoPacket()` - 判断包类型
+  - `decodeAudioPacket()` - 解码音频包
+  - `decodeVideoPacket()` - 解码视频包
+  - `flushAudioDecoder()` / `flushVideoDecoder()` - 刷新解码器
+  - `receiveAudioFrames()` / `receiveVideoFrames()` - 接收解码帧
+- `current_time_` 改为原子变量
+- 保留 `decodeNextFrame()` 作为遗留接口（不再使用）
+
+#### C. PlayerController 三线程架构
+
+**文件**：`PlayerController.h` / `PlayerController.cpp`
+
+- 新增 `audio_packets_` 和 `video_packets_` 队列成员
+- 重构 `playbackThread()` 为 demux/control 主循环：
+  - 读取压缩包并分发到对应队列
+  - seek 处理：清空队列 + `decoder_->seek()`
+  - 变速处理：换车次 + 重置音频时钟 + `setPlaybackSpeed()`
+  - 队列流控：超过 80 个包时休眠
+- 新增音频工作线程：
+  - 从 `audio_packets_` 取包
+  - `decodeAudioPacket()` 解码
+  - 音量调整 → `audio_output_->play()` 播放
+  - 更新音频主时钟
+  - generation 检查
+- 新增视频工作线程：
+  - 从 `video_packets_` 取包
+  - `decodeVideoPacket()` 解码
+  - 根据音频主时钟等待/丢帧
+  - 纯音频文件用墙时钟同步
+  - generation 检查
+
+#### D. generation 机制（车次号）
+
+**设计**：
+- `stream_generation` 原子计数器
+- seek/变速时 `fetch_add(1)` 换车次
+- 队列里的旧车次包被丢弃
+- 避免旧速度的包用新速度解码
+
+**类比**：generation = 车次号，packet/frame = 乘客，音频/视频线程 = 接站的人
+
+#### E. 音频主时钟
+
+**设计**：
+- WASAPI 播放进度作为时间基准
+- `audio_clock_base + playedSeconds * active_speed`
+- 视频帧根据音频主时钟等待/丢帧
+- 纯音频文件用墙时钟同步
+
+#### F. AudioOutput 扩展
+
+**文件**：`AudioOutput.h` / `AudioOutput.cpp`
+
+- 新增 `getPlayedSeconds()` - 获取已播放秒数
+- 新增 `getQueuedSeconds()` - 获取队列秒数
+- 新增 `reset()` - 重置缓冲区
+
+#### G. CMake 构建更新
+
+**文件**：`CMakeLists.txt`
+
+- 添加 `PacketQueue.h` 和 `PacketQueue.cpp` 到编译列表
+
+**效果**：
+- ✅ 多核并行解码，性能提升
+- ✅ 音频主时钟，音视频同步更稳定
+- ✅ generation 机制，seek/变速更可靠
+- ⚠️ 变速时可能有轻微快进感（WASAPI 缓冲区清空导致）
+
+### 3.13 数据库从 MySQL Connector/C++ 迁移到 MariaDB C API
+
+**背景**：CMake/MinGW 构建下，MySQL Connector/C++ 二进制不兼容问题难以解决。
+
+**改动内容**：
+
+**文件**：`MediaDatabase.h` / `MediaDatabase.cpp`
+
+- 从 `sql::Connection` / `sql::PreparedStatement` 迁移到 `mysql.h` / `MYSQL*`
+- 从 C++ API 迁移到 C API
+- 使用项目本地便携 MariaDB Connector（`third_party/mariadb/mingw64`）
+- CMake 设置 `MEDIASTUDIO_ENABLE_MYSQL=ON` 和 `MEDIASTUDIO_MYSQL_CONNECTOR_ROOT`
+
+**效果**：
+- ✅ MinGW 构建下数据库功能正常工作
+- ✅ Release 和 Debug 构建都通过
+- ✅ 依赖包精简到 ~20MB
+
+### 3.14 当前已知问题与下一步方向
 
 | 问题 | 状态 | 下一步方向 |
 |------|------|-----------|
@@ -264,9 +378,9 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 
 | 统计口径 | 数值 | 备注 |
 |---------|------|------|
-| 总代码行数 | **~3,839 行** | 不含注释/空行，排除 `glad.c` |
-| 核心模块 | ~2,500 行 | Decoder, Controller, Renderer |
-| UI 与业务 | ~1,000 行 | MainWindow, Database, Transcoder |
+| 总代码行数 | **4,720 行** | 不含注释/空行，排除 `glad.c` |
+| 核心模块 | ~3,200 行 | Decoder, Controller, Renderer, Queue |
+| UI 与业务 | ~1,500 行 | MainWindow, Database, Transcoder |
 
 ## 五、文件清单与阅读顺序建议
 
@@ -274,17 +388,18 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 核心播放链路（按调用顺序）：
 1. main.cpp              → 程序入口，初始化 QApplication + MainWindow
 2. MainWindow.cpp/h      → Qt GUI，事件处理，播放列表，所有用户交互入口
-3. PlayerController.cpp/h → 播放控制枢纽：生命周期、播放线程、seek、倍速、音量
-4. MediaDecoder.cpp/h    → FFmpeg 解码：open/close/decodeNextFrame/seek/atempo filter
-5. AudioOutput.cpp/h     → WASAPI 音频输出：init/playPCM/setVolume/pause/resume
-6. VideoWidget.cpp/h     → QOpenGLWidget：帧缓冲区、定时刷新、clearFrame
-7. VideoRenderer.cpp/h   → OpenGL 渲染：着色器编译、纹理上传、7 种特效
-8. AudioVisualizer.cpp/h → FFT 频谱可视化：Cooley-Tukey、频谱柱状图
+3. PlayerController.cpp/h → 播放控制枢纽：三线程架构、generation 机制、音频主时钟
+4. PacketQueue.cpp/h      → 线程安全队列：push/pop/abort/finish
+5. MediaDecoder.cpp/h    → FFmpeg 解码：readPacket/decodeAudioPacket/decodeVideoPacket
+6. AudioOutput.cpp/h     → WASAPI 音频输出：init/play/getPlayedSeconds/reset
+7. VideoWidget.cpp/h     → QOpenGLWidget：帧缓冲区、定时刷新、clearFrame
+8. VideoRenderer.cpp/h   → OpenGL 渲染：着色器编译、纹理上传、7 种特效
+9. AudioVisualizer.cpp/h → FFT 频谱可视化：Cooley-Tukey、频谱柱状图
 
 辅助模块：
-9.  MediaInfo.h           → 所有结构体定义
-10. MediaDatabase.cpp/h   → MySQL 媒体库（可选功能）
-11. MediaTranscoder.cpp/h → FFmpeg 格式转码（可选功能）
+10. MediaInfo.h           → 所有结构体定义
+11. MediaDatabase.cpp/h   → MariaDB/MySQL 媒体库（可选功能）
+12. MediaTranscoder.cpp/h → FFmpeg 格式转码（可选功能）
 ```
 
 ## 六、调试与测试建议
