@@ -70,6 +70,8 @@ PlayerController (状态管理)
 
 ### 1.3 线程模型
 
+#### 当前架构（第三步多线程重构）
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Qt 主线程 (GUI Thread)                       │
@@ -79,15 +81,29 @@ PlayerController (状态管理)
 │  - UI 控件更新 (进度条/按钮/状态栏)                             │
 │  - QMetaObject::invokeMethod (跨线程 UI 更新)                   │
 ├─────────────────────────────────────────────────────────────┤
-│                  播放线程 (Playback Thread)                     │
-│  - PlayerController::playbackThread()                          │
-│  - av_read_frame() (读取 AVPacket)                             │
-│  - avcodec_send/receive() (解码 AVFrame)                       │
-│  - sws_scale() (视频色彩转换)                                   │
-│  - swr_convert() + atempo (音频重采样+变速)                     │
-│  - audio_output_->playPCM() (WASAPI 播放)                      │
-│  - video_widget_->setVideoFrame() (推送视频帧)                  │
-│  - 帧率控制 (根据 pts 计算 sleep 时间)                          │
+│            demux/control 线程 (主线程)                          │
+│  - PlayerController::playbackThread() 主循环                   │
+│  - decoder_->readPacket() (读取 AVPacket)                      │
+│  - 判断音频/视频流，分发到对应队列                               │
+│  - seek 处理：清空队列 + decoder_->seek()                      │
+│  - 变速处理：换车次 + 重置音频时钟 + setPlaybackSpeed()         │
+│  - 队列流控：队列超过 80 个包时休眠                              │
+├─────────────────────────────────────────────────────────────┤
+│                  音频工作线程 (Audio Worker)                     │
+│  - audio_packets_.pop() (从队列取包)                           │
+│  - decoder_->decodeAudioPacket() (解码音频)                    │
+│  - 音量调整 → audio_output_->play() (WASAPI 播放)               │
+│  - 更新音频主时钟 (audio_clock_base + playedSeconds * speed)    │
+│  - FFT 频谱可视化 → video_widget_->setSpectrumData()           │
+│  - generation 检查：跳过旧车次的帧                              │
+├─────────────────────────────────────────────────────────────┤
+│                  视频工作线程 (Video Worker)                     │
+│  - video_packets_.pop() (从队列取包)                           │
+│  - decoder_->decodeVideoPacket() (解码视频)                    │
+│  - 音视频同步：根据音频主时钟等待/丢帧                          │
+│  - 纯音频文件：根据墙时钟同步                                   │
+│  - video_widget_->setVideoFrame() (渲染视频帧)                  │
+│  - generation 检查：跳过旧车次的帧                              │
 ├─────────────────────────────────────────────────────────────┤
 │              异步加载线程 (Async Load Thread)                    │
 │  - MainWindow::requestLoadAndPlay() 中的 std::thread            │
@@ -95,6 +111,31 @@ PlayerController (状态管理)
 │  - 数据库同步 (getMediaByPath / addMedia / recordPlayHistory)   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+#### 关键设计：generation 机制（车次号）
+
+- **类比**：generation = 车次号，packet/frame = 乘客，音频/视频线程 = 接站的人
+- **seek/变速时**：`stream_generation.fetch_add(1)` 换车次
+- **旧包处理**：队列里的旧车次包被丢弃（`packet_generation != stream_generation`）
+- **避免混用**：旧速度的包不会用新速度解码，避免音频忽快忽慢
+
+#### 关键设计：音频主时钟
+
+- **WASAPI 播放进度**：`audio_output_->getPlayedSeconds()` 返回已播放秒数
+- **时钟计算**：`audio_clock_base + playedSeconds * active_speed`
+- **视频同步**：视频帧根据音频主时钟等待/丢帧
+- **纯音频文件**：使用墙时钟同步（`playback_anchor` + `anchor_pts`）
+
+#### 与单线程版本对比
+
+| 特性 | 单线程版本 | 多线程版本（第三步） |
+|------|----------|-------------------|
+| 线程数 | 1 个播放线程 | 3 个线程（demux + 音频 + 视频） |
+| 解码方式 | 顺序解码 | 并行解码 |
+| 音视频同步 | 视频时钟优先 | 音频主时钟 |
+| 队列 | 无 | PacketQueue（线程安全） |
+| seek/变速 | 直接调用 | generation 机制 + 队列清空 |
+| 性能 | 单核受限 | 多核并行 |
 
 ### 1.4 核心依赖库
 
@@ -123,24 +164,27 @@ PlayerController (状态管理)
 | **入口**    | `main.cpp`                | 程序入口          | COM 初始化、QApplication 创建、命令行参数处理                                                                      | Qt, COM                    |
 | **界面声明**  | `MainWindow.h`            | GUI 声明        | UI 控件、信号槽、核心成员变量、快捷键方法                                                                               | Qt Widgets                 |
 | **界面实现**  | `MainWindow.cpp`          | GUI 实现 + 事件处理 | `requestLoadAndPlay()` 异步加载、`setupShortcuts()` 全局快捷键、数据库同步逻辑                                         | Qt, 多线程, MySQL             |
-| **控制枢纽**  | `PlayerController.h/.cpp` | 播放控制          | `loadFile()`/`play()`/`stop()` 生命周期、`playbackThread()` 主循环、`session_id_` 会话隔离、`lifecycle_mutex_` 递归锁 | C++17, std::thread, atomic |
-| **解码器**   | `MediaDecoder.h/.cpp`     | FFmpeg 解码     | `open()`/`close()`/`decodeNextFrame()`、`AVFilterGraph` 的 `atempo` 集成、`sws_scale` 色彩转换、视频时钟优先逻辑       | FFmpeg, 音视频处理              |
-| **音频输出**  | `AudioOutput.h/.cpp`      | WASAPI 音频     | `init()` 六步流程、`playPCM()` 缓冲区写入、`pause()`/`resume()`、COM 接口                                          | WASAPI, COM                |
+| **控制枢纽**  | `PlayerController.h/.cpp` | 播放控制          | `loadFile()`/`play()`/`stop()` 生命周期、`playbackThread()` 三线程架构、`stream_generation` 机制、音频主时钟 | C++17, std::thread, atomic |
+| **队列**     | `PacketQueue.h/.cpp`      | 线程安全队列       | `push()`/`pop()` 阻塞等待、`abort()`/`finish()` 终止标志、线程同步                                          | C++17, std::mutex, condition_variable |
+| **解码器**   | `MediaDecoder.h/.cpp`     | FFmpeg 解码     | `readPacket()`/`decodeAudioPacket()`/`decodeVideoPacket()` 分离接口、`setPlaybackSpeed()` atempo 滤镜重建       | FFmpeg, 音视频处理              |
+| **音频输出**  | `AudioOutput.h/.cpp`      | WASAPI 音频     | `init()` 六步流程、`play()` 缓冲区写入、`getPlayedSeconds()` 音频主时钟、`reset()` 重置                               | WASAPI, COM                |
 | **视频显示**  | `VideoWidget.h/.cpp`      | Qt OpenGL     | `QOpenGLWidget` 三件套、帧缓冲互斥锁、`clearFrame()`、焦点策略 `NoFocus`                                             | Qt OpenGL, 多线程             |
 | **视频渲染**  | `VideoRenderer.h/.cpp`    | OpenGL 渲染     | 着色器编译、纹理上传、`glTexSubImage2D`、7 种 GLSL 特效                                                             | OpenGL, GLSL               |
 | **音频可视化** | `AudioVisualizer.h/.cpp`  | FFT 频谱        | `fft()` Cooley-Tukey 实现、窗函数、分贝归一化                                                                    | 数字信号处理                     |
 | **数据结构**  | `MediaInfo.h`             | 结构定义          | `MediaInfo`、`VideoStreamInfo`、`AudioStreamInfo`、`VideoEffect` 枚举、`db_id`、`is_favorite`               | C++ 结构体                    |
-| **数据库**   | `MediaDatabase.h/.cpp`    | MySQL 媒体库     | `PreparedStatement`、`getMediaByPath`、CRUD 操作、播放历史记录                                                  | MySQL Connector/C++        |
+| **数据库**   | `MediaDatabase.h/.cpp`    | MySQL 媒体库     | MariaDB C API、`mysql_real_connect()`、`mysql_query()`、CRUD 操作、播放历史记录                                    | MariaDB/MySQL C API         |
 | **转码器**   | `MediaTranscoder.h/.cpp`  | 格式转码          | FFmpeg 编码 API 完整链路、PTS 换算、YUV420P 兼容性                                                                | FFmpeg 编码                  |
 
 
 ### 2.2 架构理解口诀
 
 - **一条主线**：`MainWindow` 收到用户操作 → 调用 `PlayerController` → `MediaDecoder` 解码 → `AudioOutput` 播放音频 + `VideoWidget` 显示视频
-- **两个线程**：Qt 主线程（GUI + OpenGL）+ `playbackThread`（解码 + 音频输出 + 帧推送）
-- **三道关卡**：`load_request_id_`（UI 层去重）→ `lifecycle_mutex_`（控制器层互斥）→ `session_id_`（播放线程层会话隔离）
-- **四个同步**：原子变量（标志位）、互斥锁（临界区）、递归锁（生命周期）、Qt 队列调用（跨线程 UI 更新）
-- **五个关键**：视频时钟优先、全局快捷键、数据库自动同步、焦点策略、Debug/Release 二进制兼容
+- **三个线程**：Qt 主线程（GUI + OpenGL）+ demux/control 线程（读包分发）+ 音频线程（解码播放）+ 视频线程（解码渲染）
+- **两个队列**：`audio_packets_`（音频包队列）+ `video_packets_`（视频包队列）
+- **generation 机制**：seek/变速时换车次，旧车次的包被丢弃
+- **音频主时钟**：WASAPI 播放进度作为时间基准，视频根据音频时钟同步
+- **四道关卡**：`load_request_id_`（UI 层去重）→ `lifecycle_mutex_`（控制器层互斥）→ `session_id_`（播放线程层会话隔离）→ `stream_generation`（队列层车次隔离）
+- **五个同步**：原子变量（标志位）、互斥锁（临界区）、递归锁（生命周期）、条件变量（队列阻塞）、Qt 队列调用（跨线程 UI 更新）
 
 ---
 
