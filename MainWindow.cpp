@@ -847,6 +847,16 @@ void MainWindow::updatePlaybackInfo()
         .arg(stats.video_queue_packets)
         .arg(stats.audio_buffer_seconds * 1000.0, 0, 'f', 0));
 
+    // 时间格式化
+    auto formatTime = [](double seconds) -> QString {
+        int mins = (int)(seconds / 60);
+        int secs = (int)(seconds) % 60;
+        return QString("%1:%2").arg(mins, 2, 10, QChar('0')).arg(secs, 2, 10, QChar('0'));
+    };
+
+    label_time_->setText(formatTime(current));
+    slider_progress_->setEnabled(duration > 0);
+
     if (duration > 0) {
         // 避免在用户拖动进度条时更新
         if (!slider_progress_->isSliderDown()) {
@@ -854,16 +864,10 @@ void MainWindow::updatePlaybackInfo()
             slider_progress_->setValue((int)(current / duration * 1000));
             slider_progress_->blockSignals(false);
         }
-
-        // 时间格式化
-        auto formatTime = [](double seconds) -> QString {
-            int mins = (int)(seconds / 60);
-            int secs = (int)(seconds) % 60;
-            return QString("%1:%2").arg(mins, 2, 10, QChar('0')).arg(secs, 2, 10, QChar('0'));
-        };
-
-        label_time_->setText(formatTime(current));
         label_duration_->setText(formatTime(duration));
+    }
+    else {
+        label_duration_->setText("--:--");
     }
 
     // 更新媒体信息面板

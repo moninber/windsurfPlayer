@@ -78,6 +78,8 @@ MediaDecoder::MediaDecoder()
     , video_drained_(false)
     , audio_drained_(false)
     , audio_filter_flush_sent_(false)
+    , last_video_pts_(0.0)
+    , has_last_video_pts_(false)
 {
 }
 
@@ -318,6 +320,8 @@ void MediaDecoder::close()
     video_drained_ = false;
     audio_drained_ = false;
     audio_filter_flush_sent_ = false;
+    last_video_pts_ = 0.0;
+    has_last_video_pts_ = false;
 }
 
 bool MediaDecoder::setPlaybackSpeed(float speed)
@@ -809,7 +813,25 @@ bool MediaDecoder::convertVideoFrame(AVFrame* frame, DecodedFrame& out_frame)
         return false;
     }
 
-    double pts = getFrameTimestampSeconds(frame, video_stream_index_);
+    int64_t ts = frame->best_effort_timestamp;
+    if (ts == AV_NOPTS_VALUE) ts = frame->pts;
+    if (ts == AV_NOPTS_VALUE) ts = frame->pkt_dts;
+
+    const double fps = media_info_.video_info.frame_rate > 0.0
+        ? media_info_.video_info.frame_rate
+        : 25.0;
+    double pts = 0.0;
+    if (ts != AV_NOPTS_VALUE) {
+        pts = ts * av_q2d(format_ctx_->streams[video_stream_index_]->time_base);
+        if (!media_info_.has_audio && has_last_video_pts_ && pts <= last_video_pts_) {
+            pts = last_video_pts_ + 1.0 / fps;
+        }
+    }
+    else {
+        pts = has_last_video_pts_ ? last_video_pts_ + 1.0 / fps : 0.0;
+    }
+    last_video_pts_ = pts;
+    has_last_video_pts_ = true;
 
     if (frame->format == AV_PIX_FMT_YUV420P) {
         const int y_size = frame->width * frame->height;
@@ -1035,6 +1057,8 @@ void MediaDecoder::seek(double seconds)
     video_drained_ = !media_info_.has_video;
     audio_drained_ = !media_info_.has_audio;
     audio_filter_flush_sent_ = false;
+    last_video_pts_ = seconds;
+    has_last_video_pts_ = true;
 
     current_time_ = seconds;
 }
@@ -1062,7 +1086,9 @@ void MediaDecoder::extractMediaInfo()
 
     // 文件格式信息
     media_info_.format_name = format_ctx_->iformat->name;
-    media_info_.duration = format_ctx_->duration / AV_TIME_BASE; // AV_TIME_BASE是微秒
+    media_info_.duration = (format_ctx_->duration > 0)
+        ? static_cast<double>(format_ctx_->duration) / AV_TIME_BASE
+        : 0.0;
     media_info_.file_size = format_ctx_->pb ? avio_size(format_ctx_->pb) : 0;
     media_info_.overall_bit_rate = format_ctx_->bit_rate;
 
@@ -1077,6 +1103,12 @@ void MediaDecoder::extractMediaInfo()
         if (fps <= 0 || fps > 120) fps = av_q2d(vstream->r_frame_rate);
         if (fps <= 0 || fps > 120) fps = 25.0;
         media_info_.video_info.frame_rate = fps;
+        if (media_info_.duration <= 0.0 && vstream->duration > 0) {
+            media_info_.duration = vstream->duration * av_q2d(vstream->time_base);
+        }
+        if (media_info_.duration <= 0.0 && vstream->nb_frames > 0 && fps > 0.0) {
+            media_info_.duration = static_cast<double>(vstream->nb_frames) / fps;
+        }
         media_info_.video_info.codec_name = avcodec_get_name(video_codec_ctx_->codec_id);
         media_info_.video_info.pixel_format = av_get_pix_fmt_name(video_codec_ctx_->pix_fmt);
         media_info_.video_info.bit_rate = video_codec_ctx_->bit_rate;

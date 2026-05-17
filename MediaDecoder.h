@@ -156,6 +156,8 @@ private:
     bool video_drained_;
     bool audio_drained_;
     bool audio_filter_flush_sent_;
+    double last_video_pts_;
+    bool has_last_video_pts_;
 
     // 音频重采样目标参数
     static constexpr int TARGET_SAMPLE_RATE = 44100;  // 目标采样率
