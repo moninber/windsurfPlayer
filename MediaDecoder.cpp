@@ -10,7 +10,6 @@
 #include <cstring>
 #include <iostream>
 #include <sstream>
-#include <thread>
 
 // 外部调用者（PlayerController）
 // │
@@ -31,22 +30,6 @@
 // │   ├── av_seek_frame()             跳转到关键帧
 // │   ├── avcodec_flush_buffers()     清空解码器缓冲
 // │   └── 重置 eof/flush 状态标志
-// │
-// ├── decodeNextFrame(out_frame)      ← 每次循环调用一次
-// │   ├── [未EOF] av_read_frame()     读取压缩 packet
-// │   │   ├── [视频packet]
-// │   │   │   └── avcodec_send_packet() → avcodec_receive_frame()
-// │   │   │       └── convertVideoFrame()
-// │   │   │           ├── sws_scale()         YUV → RGB24
-// │   │   │           └── getFrameTimestampSeconds() 计算PTS(秒)
-// │   │   └── [音频packet]
-// │   │       └── avcodec_send_packet() → av_buffersrc_add_frame()
-// │   │           └── pullAudioFilterFrame()
-// │   │               ├── av_buffersink_get_frame() 从滤镜图取帧
-// │   │               └── convertAudioFrame()
-// │   │                   ├── swr_convert()   重采样→S16LE 44100Hz
-// │   │                   └── getFrameTimestampSeconds()
-// │   └── [EOF] 发送 flush packet → 排干解码器残留帧
 // │
 // └── close()
 //     ├── destroyAudioFilterGraph()
@@ -71,11 +54,6 @@ MediaDecoder::MediaDecoder()
     , audio_stream_index_(-1)
     , current_time_(0.0)
     , playback_speed_(1.0f)
-    , eof_reached_(false)
-    , video_flush_sent_(false)
-    , audio_flush_sent_(false)
-    , audio_decoder_drained_(false)
-    , video_drained_(false)
     , audio_drained_(false)
     , audio_filter_flush_sent_(false)
     , last_video_pts_(0.0)
@@ -249,11 +227,6 @@ bool MediaDecoder::open(const std::string& filename)
     // 从路径中提取文件名
     size_t pos = filename.find_last_of("/\\");
     media_info_.file_name = (pos != std::string::npos) ? filename.substr(pos + 1) : filename;
-    eof_reached_ = false;
-    video_flush_sent_ = false;
-    audio_flush_sent_ = false;
-    audio_decoder_drained_ = !media_info_.has_audio;
-    video_drained_ = !media_info_.has_video;
     audio_drained_ = !media_info_.has_audio;
     audio_filter_flush_sent_ = false;
     extractMediaInfo();
@@ -313,11 +286,6 @@ void MediaDecoder::close()
     current_time_ = 0.0;
     playback_speed_ = 1.0f;
     media_info_ = MediaInfo();  // 重置媒体信息
-    eof_reached_ = false;
-    video_flush_sent_ = false;
-    audio_flush_sent_ = false;
-    audio_decoder_drained_ = false;
-    video_drained_ = false;
     audio_drained_ = false;
     audio_filter_flush_sent_ = false;
     last_video_pts_ = 0.0;
@@ -612,7 +580,6 @@ bool MediaDecoder::flushVideoDecoder(std::vector<DecodedFrame>& out_frames)
 
     avcodec_send_packet(video_codec_ctx_, nullptr);
     receiveVideoFrames(out_frames);
-    video_drained_ = true;
     return true;
 }
 
@@ -640,7 +607,6 @@ bool MediaDecoder::flushAudioDecoder(std::vector<DecodedFrame>& out_frames)
         filtered_frame = DecodedFrame();
     }
 
-    audio_decoder_drained_ = true;
     audio_drained_ = true;
     return true;
 }
@@ -665,9 +631,6 @@ void MediaDecoder::receiveVideoFrames(std::vector<DecodedFrame>& out_frames)
             }
             av_frame_unref(frame);
             continue;
-        }
-        if (ret == AVERROR_EOF) {
-            video_drained_ = true;
         }
         break;
     }
@@ -696,112 +659,10 @@ void MediaDecoder::receiveAudioFrames(std::vector<DecodedFrame>& out_frames)
             av_frame_unref(frame);
             continue;
         }
-        if (ret == AVERROR_EOF) {
-            audio_decoder_drained_ = true;
-        }
         break;
     }
 
     av_frame_free(&frame);
-}
-
-// ============================================================
-// 顺序解码下一帧
-// ============================================================
-bool MediaDecoder::decodeNextFrame(DecodedFrame& out_frame)
-{
-    out_frame = DecodedFrame();
-
-    if (!format_ctx_) {
-        return false;
-    }
-
-    AVFrame* frame = av_frame_alloc();
-    AVPacket* packet = av_packet_alloc();
-    if (!frame || !packet) {
-        if (frame) av_frame_free(&frame);
-        if (packet) av_packet_free(&packet);
-        return false;
-    }
-
-    while (true) {
-        if (pullAudioFilterFrame(out_frame)) {
-            av_frame_free(&frame);
-            av_packet_free(&packet);
-            return true;
-        }
-
-        if (video_codec_ctx_ && !video_drained_) {
-            int ret = avcodec_receive_frame(video_codec_ctx_, frame);
-            if (ret == 0) {
-                bool ok = convertVideoFrame(frame, out_frame);
-                av_frame_unref(frame);
-                if (ok) {
-                    av_frame_free(&frame);
-                    av_packet_free(&packet);
-                    return true;
-                }
-            }
-            else if (ret == AVERROR_EOF) {
-                video_drained_ = true;
-            }
-        }
-
-        if (audio_codec_ctx_ && !audio_decoder_drained_) {
-            int ret = avcodec_receive_frame(audio_codec_ctx_, frame);
-            if (ret == 0) {
-                bool ok = convertAudioFrame(frame, out_frame);
-                av_frame_unref(frame);
-                if (ok) {
-                    av_frame_free(&frame);
-                    av_packet_free(&packet);
-                    return true;
-                }
-            }
-            else if (ret == AVERROR_EOF) {
-                audio_decoder_drained_ = true;
-            }
-        }
-
-        if (eof_reached_) {
-            if (video_codec_ctx_ && !video_flush_sent_) {
-                avcodec_send_packet(video_codec_ctx_, nullptr);
-                video_flush_sent_ = true;
-            }
-            if (audio_codec_ctx_ && !audio_flush_sent_) {
-                avcodec_send_packet(audio_codec_ctx_, nullptr);
-                audio_flush_sent_ = true;
-            }
-            if (audio_decoder_drained_ && audio_buffer_src_ctx_ && !audio_filter_flush_sent_) {
-                av_buffersrc_add_frame_flags(audio_buffer_src_ctx_, nullptr, 0);
-                audio_filter_flush_sent_ = true;
-            }
-
-            if ((video_drained_ || !video_codec_ctx_) && (audio_drained_ || !audio_codec_ctx_)) {
-                av_frame_free(&frame);
-                av_packet_free(&packet);
-                return false;
-            }
-
-            std::this_thread::yield();
-            continue;
-        }
-
-        int read_ret = av_read_frame(format_ctx_, packet);
-        if (read_ret < 0) {
-            eof_reached_ = true;
-            continue;
-        }
-
-        if (packet->stream_index == video_stream_index_ && video_codec_ctx_) {
-            avcodec_send_packet(video_codec_ctx_, packet);
-        }
-        else if (packet->stream_index == audio_stream_index_ && audio_codec_ctx_) {
-            avcodec_send_packet(audio_codec_ctx_, packet);
-        }
-
-        av_packet_unref(packet);
-    }
 }
 
 // ============================================================
@@ -1050,11 +911,6 @@ void MediaDecoder::seek(double seconds)
         initAudioFilterGraph();
     }
 
-    eof_reached_ = false;
-    video_flush_sent_ = false;
-    audio_flush_sent_ = false;
-    audio_decoder_drained_ = !media_info_.has_audio;
-    video_drained_ = !media_info_.has_video;
     audio_drained_ = !media_info_.has_audio;
     audio_filter_flush_sent_ = false;
     last_video_pts_ = seconds;

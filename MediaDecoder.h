@@ -82,7 +82,6 @@ public:
     /** @brief 关闭文件并释放所有FFmpeg资源 */
     void close();
 
-    bool decodeNextFrame(DecodedFrame& out_frame);
     bool readPacket(AVPacket* packet);
     bool isVideoPacket(const AVPacket* packet) const;
     bool isAudioPacket(const AVPacket* packet) const;
@@ -106,15 +105,8 @@ public:
     const MediaInfo& getMediaInfo() const { return media_info_; }
 
     // 便捷访问器
-    int getWidth() const { return media_info_.video_info.width; }
-    int getHeight() const { return media_info_.video_info.height; }
-    double getDuration() const { return media_info_.duration; }
-    double getCurrentTime() const { return current_time_.load(); }
-    double getFrameRate() const { return media_info_.video_info.frame_rate; }
     bool hasVideo() const { return media_info_.has_video; }
     bool hasAudio() const { return media_info_.has_audio; }
-    int getAudioSampleRate() const { return media_info_.audio_info.sample_rate; }
-    int getAudioChannels() const { return media_info_.audio_info.channels; }
     int getOutputAudioSampleRate() const { return TARGET_SAMPLE_RATE; }
     int getOutputAudioChannels() const { return TARGET_CHANNELS; }
 
@@ -149,11 +141,6 @@ private:
     std::atomic<double> current_time_;            // 当前播放时间（秒）
     float playback_speed_;
     MediaInfo media_info_;           // 媒体文件信息
-    bool eof_reached_;
-    bool video_flush_sent_;
-    bool audio_flush_sent_;
-    bool audio_decoder_drained_;
-    bool video_drained_;
     bool audio_drained_;
     bool audio_filter_flush_sent_;
     double last_video_pts_;

@@ -289,7 +289,6 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
   - `flushAudioDecoder()` / `flushVideoDecoder()` - 刷新解码器
   - `receiveAudioFrames()` / `receiveVideoFrames()` - 接收解码帧
 - `current_time_` 改为原子变量
-- 保留 `decodeNextFrame()` 作为遗留接口（不再使用）
 
 #### C. PlayerController 三线程架构
 
@@ -394,7 +393,7 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 
 | 统计口径 | 数值 | 备注 |
 |---------|------|------|
-| 总代码行数 | **4,720 行** | 不含注释/空行，排除 `glad.c` |
+| 总代码行数 | **约 4,700 行** | 不含注释/空行 |
 | 核心模块 | ~3,200 行 | Decoder, Controller, Renderer, Queue |
 | UI 与业务 | ~1,500 行 | MainWindow, Database, Transcoder |
 

@@ -66,9 +66,6 @@ public:
     /** @brief 切换视频特效 */
     void setEffect(VideoEffect effect);
 
-    /** @brief 获取当前特效 */
-    VideoEffect getEffect() const { return current_effect_; }
-
     /** @brief 设置亮度参数（-1.0~1.0） */
     void setBrightness(float b) { brightness_ = b; }
 

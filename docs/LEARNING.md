@@ -397,13 +397,11 @@ bool MediaDecoder::open(const std::string& filename) {
     swr_ctx_ = swr_alloc_set_opts(...);  // 音频重采样
 }
 
-bool MediaDecoder::decodeNextFrame(DecodedFrame& out_frame) {
-    // 1. 读取压缩包
-    av_read_frame(format_ctx_, packet);
-    // 2. 发送给解码器
-    avcodec_send_packet(codec_ctx, packet);
-    // 3. 获取解码帧
-    avcodec_receive_frame(codec_ctx, frame);
+bool MediaDecoder::decodeVideoPacket(const AVPacket* packet, std::vector<DecodedFrame>& out_frames) {
+    // 1. 将压缩包发送给解码器
+    avcodec_send_packet(video_codec_ctx_, packet);
+    // 2. 拉取当前可用的视频帧
+    receiveVideoFrames(out_frames);
     // 4. 转换格式
     if (video) sws_scale(sws_ctx_, ...);  // YUV→RGB
     if (audio) swr_convert(swr_ctx_, ...);  // 重采样 + atempo
@@ -451,7 +449,8 @@ std::string MediaDecoder::buildAtempoFilterChain(float speed) const {
 #### 使用方法
 
 - **打开文件**：`open(path)` - 初始化解码器
-- **解码帧**：`decodeNextFrame(frame)` - 获取下一帧
+- **解码视频包**：`decodeVideoPacket(packet, frames)` - 从视频包获取解码帧
+- **解码音频包**：`decodeAudioPacket(packet, frames)` - 从音频包获取解码帧
 - **跳转**：`seek(seconds)` - 跳转到指定时间
 - **倍速**：`setPlaybackSpeed(speed)` - 设置播放速度
 - **获取信息**：`getMediaInfo()` - 获取媒体元数据
@@ -973,7 +972,7 @@ Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, Qt6OpenGLWidgets.dll                   
 | ----------------- | ------------------ | -------------------------------------------------- | ---------------------------------------------------- |
 | `AVFormatContext` | 文件格式上下文，管理所有流      | `open()` 创建，`close()` 释放                           | `MediaDecoder::format_ctx_`                          |
 | `AVCodecContext`  | 编解码器上下文，保存解码状态     | `open()` 创建，`close()` 释放                           | `MediaDecoder::video_codec_ctx_`, `audio_codec_ctx_` |
-| `AVPacket`        | 压缩数据包（从文件读取的原始数据）  | `av_packet_alloc()` / `av_packet_unref()`          | `MediaDecoder::decodeNextFrame()`                    |
+| `AVPacket`        | 压缩数据包（从文件读取的原始数据）  | `av_packet_alloc()` / `av_packet_unref()`          | `MediaDecoder::readPacket()`                         |
 | `AVFrame`         | 解码后的原始帧（YUV / PCM） | `av_frame_alloc()` / `av_frame_free()`             | 每次解码后临时创建                                            |
 | `SwsContext`      | 视频色彩空间转换上下文        | `sws_getContext()` / `sws_freeContext()`           | `MediaDecoder::sws_ctx_`                             |
 | `SwrContext`      | 音频重采样上下文           | `swr_alloc_set_opts()` / `swr_free()`              | `MediaDecoder::swr_ctx_`                             |
