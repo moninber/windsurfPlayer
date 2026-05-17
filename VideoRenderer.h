@@ -49,11 +49,13 @@ public:
 
     /**
      * @brief 渲染一帧视频数据
-     * @param data RGB24像素数据
+     * @param data RGBA像素数据
      * @param width 帧宽度
      * @param height 帧高度
      */
-    void render(const uint8_t* data, int width, int height);
+    void renderRGBA(const uint8_t* data, int width, int height);
+    void renderYUV420P(const uint8_t* y, const uint8_t* u, const uint8_t* v,
+        bool full_range, bool bt709, int width, int height);
 
     /** @brief 窗口大小变化时调整视口 */
     void resize(int width, int height);
@@ -87,7 +89,9 @@ private:
     bool compileShaders();
 
     /** @brief 创建纹理对象 */
-    bool createTexture();
+    bool createTextures();
+    void ensureTextureStorage(VideoFrameFormat format, int width, int height);
+    void drawFrame(VideoFrameFormat format);
 
     /** @brief 创建顶点几何体（全屏四边形） */
     void createGeometry();
@@ -95,11 +99,12 @@ private:
     GLuint vao_;               // 顶点数组对象
     GLuint vbo_;               // 顶点缓冲对象
     GLuint ebo_;               // 索引缓冲对象
-    GLuint texture_;           // 纹理对象
+    GLuint textures_[3];       // 视频纹理对象
     GLuint shader_program_;    // 着色器程序
 
     int texture_width_;        // 纹理宽度
     int texture_height_;       // 纹理高度
+    VideoFrameFormat texture_format_;
 
     VideoEffect current_effect_;  // 当前特效
     float brightness_;            // 亮度参数

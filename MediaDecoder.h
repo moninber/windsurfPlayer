@@ -52,7 +52,12 @@ struct DecodedFrame {
     };
 
     Type type = Type::None;
+    VideoFrameFormat video_format = VideoFrameFormat::RGBA;
     uint8_t* data = nullptr;
+    uint8_t* planes[3] = { nullptr, nullptr, nullptr };
+    int linesizes[3] = { 0, 0, 0 };
+    bool video_full_range = false;
+    bool video_bt709 = false;
     int data_size = 0;
     int width = 0;
     int height = 0;

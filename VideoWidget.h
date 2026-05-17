@@ -47,11 +47,14 @@ public:
 
     /**
      * @brief 设置视频帧数据（由PlayerController调用，线程安全）
-     * @param data RGB24像素数据
+     * @param format 帧像素格式
+     * @param planes 帧平面数据
+     * @param linesizes 各平面行跨度
      * @param width 帧宽度
      * @param height 帧高度
      */
-    void setVideoFrame(const uint8_t* data, int width, int height);
+    void setVideoFrame(VideoFrameFormat format, const uint8_t* const planes[3],
+        const int linesizes[3], bool full_range, bool bt709, int width, int height);
 
     /**
      * @brief 设置频谱数据（由PlayerController调用，线程安全）
@@ -82,7 +85,10 @@ private:
 
     // 帧数据缓冲区（线程安全）
     std::mutex frame_mutex_;
-    std::vector<uint8_t> frame_data_;
+    std::vector<uint8_t> frame_planes_[3];
+    VideoFrameFormat frame_format_;
+    bool frame_full_range_;
+    bool frame_bt709_;
     int frame_width_;
     int frame_height_;
     bool has_new_frame_;

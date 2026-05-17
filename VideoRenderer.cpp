@@ -64,14 +64,61 @@ static const char* fragment_shader_source = R"(
 out vec4 FragColor;
 in vec2 TexCoord;
 
-uniform sampler2D texture1;     // 视频帧纹理
+uniform sampler2D texture1;     // RGBA纹理
+uniform sampler2D textureY;     // Y平面纹理
+uniform sampler2D textureU;     // U平面纹理
+uniform sampler2D textureV;     // V平面纹理
+uniform int uInputFormat;       // 0=RGBA, 1=YUV420P
+uniform bool uFullRange;
+uniform bool uBt709;
 uniform int uEffect;            // 特效选择
 uniform float uBrightness;     // 亮度参数
 uniform float uContrast;       // 对比度参数
 uniform vec2 uTexelSize;       // 纹素大小（用于邻域采样）
 
+vec4 sampleVideo(vec2 coord) {
+    if (uInputFormat == 1) {
+        float y = texture(textureY, coord).r;
+        float u = texture(textureU, coord).r - 0.5;
+        float v = texture(textureV, coord).r - 0.5;
+        vec3 rgb;
+        if (uFullRange && uBt709) {
+            rgb = vec3(
+                y + 1.5748 * v,
+                y - 0.187324 * u - 0.468124 * v,
+                y + 1.8556 * u
+            );
+        }
+        else if (uFullRange) {
+            rgb = vec3(
+                y + 1.402 * v,
+                y - 0.344136 * u - 0.714136 * v,
+                y + 1.772 * u
+            );
+        }
+        else if (uBt709) {
+            y = 1.16438356 * (y - 0.0627451);
+            rgb = vec3(
+                y + 1.792741 * v,
+                y - 0.213249 * u - 0.532909 * v,
+                y + 2.112402 * u
+            );
+        }
+        else {
+            y = 1.16438356 * (y - 0.0627451);
+            rgb = vec3(
+                y + 1.596027 * v,
+                y - 0.391762 * u - 0.812968 * v,
+                y + 2.017232 * u
+            );
+        }
+        return vec4(clamp(rgb, 0.0, 1.0), 1.0);
+    }
+    return texture(texture1, coord);
+}
+
 void main() {
-    vec4 color = texture(texture1, TexCoord);
+    vec4 color = sampleVideo(TexCoord);
 
     // 无特效 - 直接输出原始颜色
     if (uEffect == 0) {
@@ -90,14 +137,14 @@ void main() {
     // 边缘检测 - Sobel算子
     // 计算水平和垂直方向的亮度梯度，合成边缘强度
     else if (uEffect == 3) {
-        float tl = dot(texture(texture1, TexCoord + vec2(-uTexelSize.x,  uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-        float t  = dot(texture(texture1, TexCoord + vec2( 0.0,           uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-        float tr = dot(texture(texture1, TexCoord + vec2( uTexelSize.x,  uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-        float l  = dot(texture(texture1, TexCoord + vec2(-uTexelSize.x,  0.0)).rgb, vec3(0.299, 0.587, 0.114));
-        float r  = dot(texture(texture1, TexCoord + vec2( uTexelSize.x,  0.0)).rgb, vec3(0.299, 0.587, 0.114));
-        float bl = dot(texture(texture1, TexCoord + vec2(-uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-        float b  = dot(texture(texture1, TexCoord + vec2( 0.0,          -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-        float br = dot(texture(texture1, TexCoord + vec2( uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float tl = dot(sampleVideo(TexCoord + vec2(-uTexelSize.x,  uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float t  = dot(sampleVideo(TexCoord + vec2( 0.0,           uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float tr = dot(sampleVideo(TexCoord + vec2( uTexelSize.x,  uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float l  = dot(sampleVideo(TexCoord + vec2(-uTexelSize.x,  0.0)).rgb, vec3(0.299, 0.587, 0.114));
+        float r  = dot(sampleVideo(TexCoord + vec2( uTexelSize.x,  0.0)).rgb, vec3(0.299, 0.587, 0.114));
+        float bl = dot(sampleVideo(TexCoord + vec2(-uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float b  = dot(sampleVideo(TexCoord + vec2( 0.0,          -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+        float br = dot(sampleVideo(TexCoord + vec2( uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
 
         // Sobel水平核: [-1,0,1; -2,0,2; -1,0,1]
         float gx = -tl - 2.0*l - bl + tr + 2.0*r + br;
@@ -111,7 +158,7 @@ void main() {
         vec3 sum = vec3(0.0);
         for (int x = -1; x <= 1; x++) {
             for (int y = -1; y <= 1; y++) {
-                sum += texture(texture1, TexCoord + vec2(x, y) * uTexelSize).rgb;
+                sum += sampleVideo(TexCoord + vec2(x, y) * uTexelSize).rgb;
             }
         }
         FragColor = vec4(sum / 9.0, 1.0);
@@ -145,14 +192,17 @@ VideoRenderer::VideoRenderer()
     : vao_(0)
     , vbo_(0)
     , ebo_(0)
-    , texture_(0)
     , shader_program_(0)
     , texture_width_(0)
     , texture_height_(0)
+    , texture_format_(VideoFrameFormat::RGBA)
     , current_effect_(VideoEffect::None)
     , brightness_(0.0f)
     , contrast_(1.0f)
 {
+    textures_[0] = 0;
+    textures_[1] = 0;
+    textures_[2] = 0;
 }
 
 VideoRenderer::~VideoRenderer()
@@ -169,7 +219,7 @@ bool VideoRenderer::init(int width, int height)
     texture_height_ = height;
 
     if (!compileShaders()) return false;
-    if (!createTexture()) return false;
+    if (!createTextures()) return false;
     createGeometry();
 
     std::cout << "[VideoRenderer] 初始化成功: " << width << "x" << height << std::endl;
@@ -181,7 +231,10 @@ void VideoRenderer::cleanup()
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (ebo_) { glDeleteBuffers(1, &ebo_); ebo_ = 0; }
-    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
+    glDeleteTextures(3, textures_);
+    textures_[0] = 0;
+    textures_[1] = 0;
+    textures_[2] = 0;
     if (shader_program_) { glDeleteProgram(shader_program_); shader_program_ = 0; }
 }
 
@@ -255,31 +308,20 @@ bool VideoRenderer::compileShaders()
 // ============================================================
 // 创建纹理
 // ============================================================
-bool VideoRenderer::createTexture()
+bool VideoRenderer::createTextures()
 {
-    // glGenTextures() 生成纹理对象
-    // glBindTexture() 绑定纹理到GL_TEXTURE_2D目标
-    // glTexParameteri() 设置纹理参数
-    // glTexImage2D() 分配纹理存储空间
-    glGenTextures(1, &texture_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
-
-    // 纹理环绕参数：坐标超出[0,1]范围时的处理方式
-    // GL_CLAMP_TO_EDGE：坐标被限制在[0,1]范围内，边缘像素延伸
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // 纹理过滤参数：纹理坐标不对应整数纹素时的采样方式
-    // GL_LINEAR：双线性插值（取周围4个纹素的加权平均）
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // 分配纹理存储空间（初始数据为nullptr，后续通过glTexSubImage2D更新）
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-        texture_width_, texture_height_,
-        0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenTextures(3, textures_);
+    for (GLuint texture : textures_) {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
 
     glBindTexture(GL_TEXTURE_2D, 0);
+    texture_width_ = 0;
+    texture_height_ = 0;
     return true;
 }
 
@@ -353,50 +395,89 @@ void VideoRenderer::createGeometry()
 // ============================================================
 // 渲染一帧
 // ============================================================
-void VideoRenderer::render(const uint8_t* data, int width, int height)
+void VideoRenderer::ensureTextureStorage(VideoFrameFormat format, int width, int height)
 {
-    // 如果视频尺寸变化，重新分配纹理
-    if (width != texture_width_ || height != texture_height_) {
-        texture_width_ = width;
-        texture_height_ = height;
-        glBindTexture(GL_TEXTURE_2D, texture_);
+    if (format == texture_format_ && width == texture_width_ && height == texture_height_) {
+        return;
+    }
+
+    texture_format_ = format;
+    texture_width_ = width;
+    texture_height_ = height;
+
+    if (format == VideoFrameFormat::YUV420P) {
+        const int chroma_width = (width + 1) / 2;
+        const int chroma_height = (height + 1) / 2;
+        glBindTexture(GL_TEXTURE_2D, textures_[0]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, textures_[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, chroma_width, chroma_height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, textures_[2]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, chroma_width, chroma_height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    }
+    else {
+        glBindTexture(GL_TEXTURE_2D, textures_[0]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glBindTexture(GL_TEXTURE_2D, 0);
     }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
 
-    // RGBA: 4字节/像素，天然4字节对齐，无需调整GL_UNPACK_ALIGNMENT
-    glBindTexture(GL_TEXTURE_2D, texture_);
+void VideoRenderer::renderRGBA(const uint8_t* data, int width, int height)
+{
+    ensureTextureStorage(VideoFrameFormat::RGBA, width, height);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures_[0]);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    drawFrame(VideoFrameFormat::RGBA);
+}
 
-    // 激活着色器程序
+void VideoRenderer::renderYUV420P(const uint8_t* y, const uint8_t* u, const uint8_t* v,
+    bool full_range, bool bt709, int width, int height)
+{
+    ensureTextureStorage(VideoFrameFormat::YUV420P, width, height);
+    const int chroma_width = (width + 1) / 2;
+    const int chroma_height = (height + 1) / 2;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures_[0]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, y);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, textures_[1]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, chroma_width, chroma_height, GL_RED, GL_UNSIGNED_BYTE, u);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, textures_[2]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, chroma_width, chroma_height, GL_RED, GL_UNSIGNED_BYTE, v);
     glUseProgram(shader_program_);
+    glUniform1i(glGetUniformLocation(shader_program_, "uFullRange"), full_range ? 1 : 0);
+    glUniform1i(glGetUniformLocation(shader_program_, "uBt709"), bt709 ? 1 : 0);
+    drawFrame(VideoFrameFormat::YUV420P);
+    glActiveTexture(GL_TEXTURE0);
+}
 
-    // 设置uniform变量（从CPU向GPU着色器传递参数）
-    // uniform变量在着色器中声明为全局变量，每个draw call可以更新
-    GLint texture_loc = glGetUniformLocation(shader_program_, "texture1");
-    glUniform1i(texture_loc, 0);  // 纹理单元0
+void VideoRenderer::drawFrame(VideoFrameFormat format)
+{
+    glUseProgram(shader_program_);
+    glUniform1i(glGetUniformLocation(shader_program_, "texture1"), 0);
+    glUniform1i(glGetUniformLocation(shader_program_, "textureY"), 0);
+    glUniform1i(glGetUniformLocation(shader_program_, "textureU"), 1);
+    glUniform1i(glGetUniformLocation(shader_program_, "textureV"), 2);
+    glUniform1i(glGetUniformLocation(shader_program_, "uInputFormat"),
+        format == VideoFrameFormat::YUV420P ? 1 : 0);
 
-    // 设置特效类型
-    GLint effect_loc = glGetUniformLocation(shader_program_, "uEffect");
-    glUniform1i(effect_loc, static_cast<int>(current_effect_));
+    glUniform1i(glGetUniformLocation(shader_program_, "uEffect"), static_cast<int>(current_effect_));
+    glUniform1f(glGetUniformLocation(shader_program_, "uBrightness"), brightness_);
+    glUniform1f(glGetUniformLocation(shader_program_, "uContrast"), contrast_);
 
-    // 设置亮度/对比度参数
-    GLint brightness_loc = glGetUniformLocation(shader_program_, "uBrightness");
-    glUniform1f(brightness_loc, brightness_);
-    GLint contrast_loc = glGetUniformLocation(shader_program_, "uContrast");
-    glUniform1f(contrast_loc, contrast_);
-
-    // 设置纹素大小（用于边缘检测和模糊的邻域采样）
     if (texture_width_ > 0 && texture_height_ > 0) {
-        GLint texel_size_loc = glGetUniformLocation(shader_program_, "uTexelSize");
-        glUniform2f(texel_size_loc, 1.0f / texture_width_, 1.0f / texture_height_);
+        glUniform2f(glGetUniformLocation(shader_program_, "uTexelSize"),
+            1.0f / texture_width_, 1.0f / texture_height_);
     }
 
-    // 绘制
     glBindVertexArray(vao_);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
-
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

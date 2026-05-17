@@ -811,6 +811,46 @@ bool MediaDecoder::convertVideoFrame(AVFrame* frame, DecodedFrame& out_frame)
 
     double pts = getFrameTimestampSeconds(frame, video_stream_index_);
 
+    if (frame->format == AV_PIX_FMT_YUV420P) {
+        const int y_size = frame->width * frame->height;
+        const int chroma_width = (frame->width + 1) / 2;
+        const int chroma_height = (frame->height + 1) / 2;
+        const int chroma_size = chroma_width * chroma_height;
+        const int buf_size = y_size + chroma_size * 2;
+        uint8_t* yuv_buf = (uint8_t*)av_malloc(buf_size);
+        if (!yuv_buf) {
+            return false;
+        }
+
+        uint8_t* dst_y = yuv_buf;
+        uint8_t* dst_u = dst_y + y_size;
+        uint8_t* dst_v = dst_u + chroma_size;
+        av_image_copy_plane(dst_y, frame->width, frame->data[0], frame->linesize[0],
+            frame->width, frame->height);
+        av_image_copy_plane(dst_u, chroma_width, frame->data[1], frame->linesize[1],
+            chroma_width, chroma_height);
+        av_image_copy_plane(dst_v, chroma_width, frame->data[2], frame->linesize[2],
+            chroma_width, chroma_height);
+
+        out_frame.type = DecodedFrame::Type::Video;
+        out_frame.video_format = VideoFrameFormat::YUV420P;
+        out_frame.data = yuv_buf;
+        out_frame.planes[0] = dst_y;
+        out_frame.planes[1] = dst_u;
+        out_frame.planes[2] = dst_v;
+        out_frame.linesizes[0] = frame->width;
+        out_frame.linesizes[1] = chroma_width;
+        out_frame.linesizes[2] = chroma_width;
+        out_frame.video_full_range = (frame->color_range == AVCOL_RANGE_JPEG);
+        out_frame.video_bt709 = (frame->width >= 1280 || frame->height >= 720);
+        out_frame.data_size = buf_size;
+        out_frame.width = frame->width;
+        out_frame.height = frame->height;
+        out_frame.pts = pts;
+        current_time_ = pts;
+        return true;
+    }
+
     sws_ctx_ = sws_getCachedContext(
         sws_ctx_,
         frame->width, frame->height, (AVPixelFormat)frame->format,
@@ -838,7 +878,12 @@ bool MediaDecoder::convertVideoFrame(AVFrame* frame, DecodedFrame& out_frame)
     sws_scale(sws_ctx_, frame->data, frame->linesize, 0, frame->height, dst, dst_stride);
 
     out_frame.type = DecodedFrame::Type::Video;
+    out_frame.video_format = VideoFrameFormat::RGBA;
     out_frame.data = rgba_buf;
+    out_frame.planes[0] = rgba_buf;
+    out_frame.linesizes[0] = frame->width * 4;
+    out_frame.video_full_range = true;
+    out_frame.video_bt709 = false;
     out_frame.data_size = buf_size;
     out_frame.width = frame->width;
     out_frame.height = frame->height;
@@ -946,20 +991,25 @@ bool MediaDecoder::convertAudioFrame(AVFrame* frame, DecodedFrame& out_frame)
 // ============================================================
 void MediaDecoder::seek(double seconds)
 {
-    if (!format_ctx_ || video_stream_index_ == -1) {
+    if (!format_ctx_) {
+        return;
+    }
+
+    const int seek_stream_index = (video_stream_index_ != -1) ? video_stream_index_ : audio_stream_index_;
+    if (seek_stream_index == -1) {
         return;
     }
 
     // 将秒数转换为流的时间戳单位（time_base）
     // FFmpeg内部使用时间戳(pts)而非秒数来表示时间
     // 转换公式：timestamp = seconds / time_base
-    AVStream* stream = format_ctx_->streams[video_stream_index_];
+    AVStream* stream = format_ctx_->streams[seek_stream_index];
     int64_t timestamp = (int64_t)(seconds / av_q2d(stream->time_base));
 
     // av_seek_frame() 跳转到指定时间戳
     // AVSEEK_FLAG_BACKWARD：向后寻找最近的关键帧
     // （因为非关键帧不能独立解码，必须从关键帧开始）
-    av_seek_frame(format_ctx_, video_stream_index_, timestamp, AVSEEK_FLAG_BACKWARD);
+    av_seek_frame(format_ctx_, seek_stream_index, timestamp, AVSEEK_FLAG_BACKWARD);
 
     // 刷新解码器缓冲区，清除旧帧
     // 跳转后，解码器中可能还有跳转前的缓存帧，需要清除

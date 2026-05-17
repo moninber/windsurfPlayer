@@ -9,6 +9,9 @@
 VideoWidget::VideoWidget(QWidget* parent)
     : QOpenGLWidget(parent)
     , gl_initialized_(false)
+    , frame_format_(VideoFrameFormat::RGBA)
+    , frame_full_range_(true)
+    , frame_bt709_(false)
     , frame_width_(0)
     , frame_height_(0)
     , has_new_frame_(false)
@@ -96,9 +99,15 @@ void VideoWidget::paintGL()
         glClear(GL_COLOR_BUFFER_BIT);
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
-        if (!frame_data_.empty()) {
+        if (!frame_planes_[0].empty()) {
             renderer_->setViewport(0, 0, viewport_width, viewport_height);
-            renderer_->render(frame_data_.data(), frame_width_, frame_height_);
+            if (frame_format_ == VideoFrameFormat::YUV420P) {
+                renderer_->renderYUV420P(frame_planes_[0].data(), frame_planes_[1].data(),
+                    frame_planes_[2].data(), frame_full_range_, frame_bt709_, frame_width_, frame_height_);
+            }
+            else {
+                renderer_->renderRGBA(frame_planes_[0].data(), frame_width_, frame_height_);
+            }
             has_new_frame_ = false;
         }
     }
@@ -111,14 +120,35 @@ void VideoWidget::resizeGL(int w, int h)
     }
 }
 
-void VideoWidget::setVideoFrame(const uint8_t* data, int width, int height)
+void VideoWidget::setVideoFrame(VideoFrameFormat format, const uint8_t* const planes[3],
+    const int linesizes[3], bool full_range, bool bt709, int width, int height)
 {
-    if (!data) return;
+    if (!planes || !planes[0]) return;
 
     std::lock_guard<std::mutex> lock(frame_mutex_);
-    size_t data_size = width * height * 4;  // RGBA
-    frame_data_.resize(data_size);
-    memcpy(frame_data_.data(), data, data_size);
+    frame_format_ = format;
+    frame_full_range_ = full_range;
+    frame_bt709_ = bt709;
+    if (format == VideoFrameFormat::YUV420P) {
+        const int chroma_width = (width + 1) / 2;
+        const int chroma_height = (height + 1) / 2;
+        const int plane_widths[3] = { width, chroma_width, chroma_width };
+        const int plane_heights[3] = { height, chroma_height, chroma_height };
+        for (int plane = 0; plane < 3; ++plane) {
+            frame_planes_[plane].resize(plane_widths[plane] * plane_heights[plane]);
+            for (int row = 0; row < plane_heights[plane]; ++row) {
+                memcpy(frame_planes_[plane].data() + row * plane_widths[plane],
+                    planes[plane] + row * linesizes[plane], plane_widths[plane]);
+            }
+        }
+    }
+    else {
+        const size_t data_size = width * height * 4;
+        frame_planes_[0].resize(data_size);
+        memcpy(frame_planes_[0].data(), planes[0], data_size);
+        frame_planes_[1].clear();
+        frame_planes_[2].clear();
+    }
     frame_width_ = width;
     frame_height_ = height;
     has_new_frame_ = true;
@@ -154,7 +184,9 @@ void VideoWidget::setEffect(VideoEffect effect)
 void VideoWidget::clearFrame()
 {
     std::lock_guard<std::mutex> lock(frame_mutex_);
-    frame_data_.clear();
+    frame_planes_[0].clear();
+    frame_planes_[1].clear();
+    frame_planes_[2].clear();
     frame_width_ = 0;
     frame_height_ = 0;
     has_new_frame_ = false;

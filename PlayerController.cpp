@@ -205,6 +205,7 @@ void PlayerController::playbackThread()
     std::atomic<bool> speed_change_pending(false);
     std::atomic<bool> audio_clock_active(false);
     std::atomic<double> audio_clock_base(current_time_.load());
+    std::atomic<double> min_valid_pts(-1.0);
     std::atomic<int> stream_generation(0);
 
     auto get_audio_clock = [&]() -> double {
@@ -235,7 +236,26 @@ void PlayerController::playbackThread()
             auto process_audio_frame = [&](DecodedFrame& frame, int frame_generation) {
                 if (!frame.data || frame.data_size <= 0) return;
 
-                std::vector<uint8_t> volume_data(frame.data, frame.data + frame.data_size);
+                const int sample_rate = decoder_->getOutputAudioSampleRate();
+                const double frame_end_pts = frame.pts + static_cast<double>(frame.samples) / sample_rate;
+                const double target_pts = min_valid_pts.load();
+                if (target_pts >= 0.0 && frame_end_pts <= target_pts) {
+                    return;
+                }
+
+                int trim_bytes = 0;
+                double effective_pts = frame.pts;
+                if (target_pts >= 0.0 && frame.pts < target_pts && frame_end_pts > target_pts) {
+                    const int bytes_per_sample_frame = frame.samples > 0 ? frame.data_size / frame.samples : 0;
+                    const int trim_samples = std::min(frame.samples,
+                        static_cast<int>(std::ceil((target_pts - frame.pts) * sample_rate)));
+                    trim_bytes = trim_samples * bytes_per_sample_frame;
+                    effective_pts = target_pts;
+                }
+
+                if (trim_bytes >= frame.data_size) return;
+
+                std::vector<uint8_t> volume_data(frame.data + trim_bytes, frame.data + frame.data_size);
                 float current_volume = volume_.load();
                 if (current_volume < 1.0f) {
                     int16_t* pcm = (int16_t*)volume_data.data();
@@ -261,7 +281,7 @@ void PlayerController::playbackThread()
 
                 if (audio_written && frame_generation == stream_generation.load()) {
                     if (!audio_clock_active.load()) {
-                        audio_clock_base.store(frame.pts);
+                        audio_clock_base.store(effective_pts);
                         audio_clock_active.store(true);
                     }
                     current_time_ = get_audio_clock();
@@ -365,6 +385,10 @@ void PlayerController::playbackThread()
 
             auto process_video_frame = [&](DecodedFrame& frame) {
                 bool display_frame = true;
+                const double target_pts = min_valid_pts.load();
+                if (target_pts >= 0.0 && frame.pts < target_pts) {
+                    return;
+                }
 
                 if (audio_ready && audio_clock_active.load()) {
                     constexpr double sync_threshold = 0.04;
@@ -397,7 +421,9 @@ void PlayerController::playbackThread()
                 }
 
                 if (display_frame && frame.data && video_widget_ && is_running() && !paused_) {
-                    video_widget_->setVideoFrame(frame.data, frame.width, frame.height);
+                    const uint8_t* planes[3] = { frame.planes[0], frame.planes[1], frame.planes[2] };
+                    video_widget_->setVideoFrame(frame.video_format, planes, frame.linesizes,
+                        frame.video_full_range, frame.video_bt709, frame.width, frame.height);
                     ++rendered_frames_window;
                 }
                 current_time_ = (audio_ready && audio_clock_active.load()) ? get_audio_clock() : frame.pts;
@@ -482,6 +508,7 @@ void PlayerController::playbackThread()
             audio_packets_.reset();
             video_packets_.reset();
             audio_clock_active.store(false);
+            min_valid_pts.store(seek_seconds);
             if (audio_ready) {
                 audio_output_->reset();
             }
