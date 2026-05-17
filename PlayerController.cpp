@@ -237,15 +237,16 @@ void PlayerController::playbackThread()
                 if (!frame.data || frame.data_size <= 0) return;
 
                 const int sample_rate = decoder_->getOutputAudioSampleRate();
+                const bool can_trim_by_pts = std::fabs(active_speed.load() - 1.0f) < 0.001f;
                 const double frame_end_pts = frame.pts + static_cast<double>(frame.samples) / sample_rate;
                 const double target_pts = min_valid_pts.load();
-                if (target_pts >= 0.0 && frame_end_pts <= target_pts) {
+                if (can_trim_by_pts && target_pts >= 0.0 && frame_end_pts <= target_pts) {
                     return;
                 }
 
                 int trim_bytes = 0;
                 double effective_pts = frame.pts;
-                if (target_pts >= 0.0 && frame.pts < target_pts && frame_end_pts > target_pts) {
+                if (can_trim_by_pts && target_pts >= 0.0 && frame.pts < target_pts && frame_end_pts > target_pts) {
                     const int bytes_per_sample_frame = frame.samples > 0 ? frame.data_size / frame.samples : 0;
                     const int trim_samples = std::min(frame.samples,
                         static_cast<int>(std::ceil((target_pts - frame.pts) * sample_rate)));
@@ -259,7 +260,7 @@ void PlayerController::playbackThread()
                 float current_volume = volume_.load();
                 if (current_volume < 1.0f) {
                     int16_t* pcm = (int16_t*)volume_data.data();
-                    int sample_count = frame.data_size / 2;
+                    int sample_count = static_cast<int>(volume_data.size() / 2);
                     for (int i = 0; i < sample_count; i++) {
                         pcm[i] = (int16_t)(pcm[i] * current_volume);
                     }
@@ -274,7 +275,7 @@ void PlayerController::playbackThread()
                 }
 
                 if (video_widget_ && show_visualizer_) {
-                    fft_calculator.processAudioData(volume_data.data(), frame.data_size,
+                    fft_calculator.processAudioData(volume_data.data(), static_cast<int>(volume_data.size()),
                         decoder_->getOutputAudioChannels(), decoder_->getOutputAudioSampleRate());
                     video_widget_->setSpectrumData(fft_calculator.getSpectrumData());
                 }
@@ -383,12 +384,12 @@ void PlayerController::playbackThread()
                 }
             };
 
-            auto process_video_frame = [&](DecodedFrame& frame) {
-                bool display_frame = true;
-                const double target_pts = min_valid_pts.load();
-                if (target_pts >= 0.0 && frame.pts < target_pts) {
+            auto process_video_frame = [&](DecodedFrame& frame, int frame_generation) {
+                if (frame_generation != stream_generation.load() || seek_requested_) {
                     return;
                 }
+
+                bool display_frame = true;
 
                 if (audio_ready && audio_clock_active.load()) {
                     constexpr double sync_threshold = 0.04;
@@ -396,10 +397,16 @@ void PlayerController::playbackThread()
 
                     double diff = frame.pts - get_audio_clock();
                     av_diff_ms_.store(diff * 1000.0);
-                    while (is_running() && !paused_ && diff > sync_threshold) {
+                    while (is_running() && !paused_ &&
+                        frame_generation == stream_generation.load() && !seek_requested_ &&
+                        diff > sync_threshold) {
                         double wait_seconds = std::min(diff, 0.01);
                         std::this_thread::sleep_for(std::chrono::duration<double>(wait_seconds));
                         diff = frame.pts - get_audio_clock();
+                    }
+
+                    if (frame_generation != stream_generation.load() || seek_requested_) {
+                        return;
                     }
 
                     if (diff < -drop_threshold) {
@@ -463,7 +470,7 @@ void PlayerController::playbackThread()
                                 release_frame(frame);
                                 continue;
                             }
-                            process_video_frame(frame);
+                            process_video_frame(frame, frame_generation);
                             release_frame(frame);
                         }
                     }
@@ -491,7 +498,7 @@ void PlayerController::playbackThread()
                         release_frame(frame);
                         continue;
                     }
-                    process_video_frame(frame);
+                    process_video_frame(frame, packet_generation);
                     release_frame(frame);
                 }
             }
@@ -518,7 +525,7 @@ void PlayerController::playbackThread()
                 decoder_->setPlaybackSpeed(active_speed.load());
             }
             current_time_ = seek_seconds;
-            seek_requested_ = false;
+            seek_requested_ = std::fabs(pending_seek_seconds_.load() - seek_seconds) > 0.0001;
             continue;
         }
 
@@ -558,8 +565,9 @@ void PlayerController::playbackThread()
             continue;
         }
 
-        if ((use_audio_queue && audio_packets_.size() > 80) ||
-            (use_video_queue && video_packets_.size() > 80)) {
+        const bool audio_queue_full = !use_audio_queue || audio_packets_.size() > 80;
+        const bool video_queue_full = !use_video_queue || video_packets_.size() > 80;
+        if (audio_queue_full && video_queue_full) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }

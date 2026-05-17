@@ -995,7 +995,8 @@ void MediaDecoder::seek(double seconds)
         return;
     }
 
-    const int seek_stream_index = (video_stream_index_ != -1) ? video_stream_index_ : audio_stream_index_;
+    // 音频是播放主时钟，优先按音频流定位能让听感上的 seek 落点更接近目标。
+    const int seek_stream_index = (audio_stream_index_ != -1) ? audio_stream_index_ : video_stream_index_;
     if (seek_stream_index == -1) {
         return;
     }
