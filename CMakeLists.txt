@@ -15,11 +15,11 @@ endif()
 option(MEDIASTUDIO_ENABLE_MYSQL "Enable MySQL media library support" OFF)
 option(MEDIASTUDIO_DEPLOY_RUNTIME "Copy runtime DLLs after build" ON)
 
-set(MEDIASTUDIO_QT_ROOT "E:/Qt/6.11.0/mingw_64" CACHE PATH "Qt installation root")
-set(MEDIASTUDIO_FFMPEG_ROOT "E:/ffmpeg" CACHE PATH "FFmpeg installation root")
-set(MEDIASTUDIO_GLEW_ROOT "E:/OpenGl/glew-2.3.1-win32/glew-2.3.1" CACHE PATH "GLEW installation root")
-set(MEDIASTUDIO_MYSQL_CONNECTOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mariadb/mingw64" CACHE PATH "MySQL Connector/C root")
-set(MEDIASTUDIO_MYSQL_SERVER_ROOT "E:/MySQL/MySQL Server 8.0" CACHE PATH "MySQL Server root")
+set(MEDIASTUDIO_QT_ROOT "" CACHE PATH "Qt installation root")
+set(MEDIASTUDIO_FFMPEG_ROOT "" CACHE PATH "FFmpeg installation root")
+set(MEDIASTUDIO_GLEW_ROOT "" CACHE PATH "GLEW installation root")
+set(MEDIASTUDIO_MYSQL_CONNECTOR_ROOT "" CACHE PATH "MySQL Connector/C root")
+set(MEDIASTUDIO_MYSQL_SERVER_ROOT "" CACHE PATH "MySQL Server root")
 
 if(EXISTS "${MEDIASTUDIO_QT_ROOT}")
     list(APPEND CMAKE_PREFIX_PATH "${MEDIASTUDIO_QT_ROOT}")
@@ -29,34 +29,34 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 find_package(OpenGL REQUIRED)
 
 set(MEDIASTUDIO_SOURCES
-    main.cpp
-    MediaDecoder.cpp
-    AudioOutput.cpp
-    VideoRenderer.cpp
-    AudioVisualizer.cpp
-    MediaTranscoder.cpp
-    PacketQueue.cpp
-    PlayerController.cpp
-    VideoWidget.cpp
-    MainWindow.cpp
+    src/main.cpp
+    src/MediaDecoder.cpp
+    src/AudioOutput.cpp
+    src/VideoRenderer.cpp
+    src/AudioVisualizer.cpp
+    src/MediaTranscoder.cpp
+    src/PacketQueue.cpp
+    src/PlayerController.cpp
+    src/VideoWidget.cpp
+    src/MainWindow.cpp
 )
 
 set(MEDIASTUDIO_HEADERS
-    MediaInfo.h
-    MediaDecoder.h
-    AudioOutput.h
-    VideoRenderer.h
-    AudioVisualizer.h
-    MediaTranscoder.h
-    PacketQueue.h
-    MediaDatabase.h
-    PlayerController.h
-    VideoWidget.h
-    MainWindow.h
+    src/MediaInfo.h
+    src/MediaDecoder.h
+    src/AudioOutput.h
+    src/VideoRenderer.h
+    src/AudioVisualizer.h
+    src/MediaTranscoder.h
+    src/PacketQueue.h
+    src/MediaDatabase.h
+    src/PlayerController.h
+    src/VideoWidget.h
+    src/MainWindow.h
 )
 
 if(MEDIASTUDIO_ENABLE_MYSQL)
-    list(APPEND MEDIASTUDIO_SOURCES MediaDatabase.cpp)
+    list(APPEND MEDIASTUDIO_SOURCES src/MediaDatabase.cpp)
 endif()
 
 qt_standard_project_setup()
@@ -72,7 +72,7 @@ target_compile_definitions(MediaStudio PRIVATE
 )
 
 target_include_directories(MediaStudio PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${MEDIASTUDIO_FFMPEG_ROOT}/include"
     "${MEDIASTUDIO_GLEW_ROOT}/include"
 )

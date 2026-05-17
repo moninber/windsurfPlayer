@@ -370,13 +370,13 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，当前采用 **Q
 
 - 从 `sql::Connection` / `sql::PreparedStatement` 迁移到 `mysql.h` / `MYSQL*`
 - 从 C++ API 迁移到 C API
-- 使用项目本地便携 MariaDB Connector（`third_party/mariadb/mingw64`）
+- 使用外部 MariaDB Connector/C 依赖
 - CMake 设置 `MEDIASTUDIO_ENABLE_MYSQL=ON` 和 `MEDIASTUDIO_MYSQL_CONNECTOR_ROOT`
 
 **效果**：
 - ✅ MinGW 构建下数据库功能正常工作
 - ✅ Release 和 Debug 构建都通过
-- ✅ 依赖包精简到 ~20MB
+- ✅ 主仓库不再内置大型数据库 SDK
 
 ### 3.14 当前已知问题与下一步方向
 

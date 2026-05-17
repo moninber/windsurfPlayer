@@ -56,21 +56,21 @@ MediaStudio 是一个基于 C++17 的桌面音视频播放器，采用 Qt 6.11 +
 
 #### Qt 6.11
 
-安装 Qt 6.11，并勾选 MinGW 64-bit、CMake、Ninja 组件。当前项目默认使用以下路径：
+安装 Qt 6.11，并勾选 MinGW 64-bit、CMake、Ninja 组件。推荐保证 `cmake`、`ninja` 和 MinGW 编译器已经加入 `PATH`，或通过本地 `CMakeUserPresets.json` 显式指定。
 
 ```text
-E:\Qt\6.11.0\mingw_64\
-E:\Qt\Tools\mingw1310_64\
-E:\Qt\Tools\CMake_64\bin\cmake.exe
-E:\Qt\Tools\Ninja\ninja.exe
+<qt-root>\
+<mingw-root>\
+<cmake-executable>
+<ninja-executable>
 ```
 
 #### FFmpeg 8.0
 
-下载 FFmpeg 开发库并解压到指定目录：
+下载 FFmpeg 开发库并解压到本地目录：
 
 ```text
-E:\ffmpeg\
+<ffmpeg-root>\
 ├── include\          ← 头文件（avcodec.h, avformat.h 等）
 ├── lib\              ← 库文件（*.lib / *.dll.a）
 └── bin\              ← DLL 文件（运行时需要）
@@ -78,17 +78,17 @@ E:\ffmpeg\
 
 #### GLEW 2.3.1
 
-下载 GLEW 并解压到指定目录：
+下载 GLEW 并解压到本地目录：
 
 ```text
-E:\OpenGl\glew-2.3.1-win32\glew-2.3.1\
+<glew-root>\
 ├── include\
 ├── lib\Release\x64\
 └── bin\Release\x64\
     └── glew32.dll
 ```
 
-#### MySQL Connector/C++（可选）
+#### MariaDB Connector/C（可选）
 
 CMake/MinGW 构建默认关闭 MySQL：
 
@@ -96,11 +96,11 @@ CMake/MinGW 构建默认关闭 MySQL：
 MEDIASTUDIO_ENABLE_MYSQL=OFF
 ```
 
-如果需要启用数据库，请准备与当前编译器 ABI 兼容的 MySQL/MariaDB Connector，并优先放到：
+如果需要启用数据库，请准备与当前编译器 ABI 兼容的 MariaDB Connector/C 或 MySQL C API 兼容库，并记录其本地路径：
 
 ```text
-E:\mysql-connector-c++\
-E:\MySQL\MySQL Server 8.0\
+<mysql-connector-root>\
+<mysql-server-root>\
 ```
 
 ---
@@ -109,7 +109,7 @@ E:\MySQL\MySQL Server 8.0\
 
 ### 4.1 一键编译（推荐）
 
-在项目根目录执行：
+在项目根目录执行。若本地存在 `CMakeUserPresets.json`，脚本会优先使用 `mingw-release-local`；否则使用公开的 `mingw-release`：
 
 ```powershell
 .\tools\build-mingw.ps1
@@ -117,17 +117,15 @@ E:\MySQL\MySQL Server 8.0\
 
 脚本会自动：
 
-- 使用 `E:\Qt\Tools\CMake_64\bin\cmake.exe`
-- 使用 `E:\Qt\Tools\Ninja\ninja.exe`
-- 使用 `E:\Qt\Tools\mingw1310_64\bin\g++.exe`
+- 使用当前环境中的 `cmake`
 - 生成 Release 构建
-- 调用 `windeployqt` 复制 Qt 运行时 DLL
-- 复制 FFmpeg/GLEW DLL 到输出目录
+- 在配置了依赖路径后调用 `windeployqt`
+- 复制 FFmpeg/GLEW 运行时 DLL 到输出目录
 
 输出文件：
 
 ```text
-E:\Learn\windsurf-project\build\mingw-release\MediaStudio.exe
+build\mingw-release\MediaStudio.exe
 ```
 
 ### 4.2 分步编译
@@ -140,22 +138,24 @@ E:\Learn\windsurf-project\build\mingw-release\MediaStudio.exe
 ### 4.3 手动 CMake 命令
 
 ```powershell
-E:\Qt\Tools\CMake_64\bin\cmake.exe --preset mingw-release
-E:\Qt\Tools\CMake_64\bin\cmake.exe --build --preset mingw-release
+cmake --preset mingw-release `
+  -DMEDIASTUDIO_QT_ROOT=<path-to-qt> `
+  -DMEDIASTUDIO_FFMPEG_ROOT=<path-to-ffmpeg> `
+  -DMEDIASTUDIO_GLEW_ROOT=<path-to-glew>
+
+cmake --build --preset mingw-release
 ```
 
 ### 4.4 Debug 构建
 
 ```powershell
-E:\Qt\Tools\CMake_64\bin\cmake.exe --preset mingw-debug
-E:\Qt\Tools\CMake_64\bin\cmake.exe --build --preset mingw-debug
+cmake --preset mingw-debug `
+  -DMEDIASTUDIO_QT_ROOT=<path-to-qt> `
+  -DMEDIASTUDIO_FFMPEG_ROOT=<path-to-ffmpeg> `
+  -DMEDIASTUDIO_GLEW_ROOT=<path-to-glew>
+
+cmake --build --preset mingw-debug
 ```
-
-### 4.5 Visual Studio 工程
-
-旧的 `MediaStudio.sln` 和 `MediaStudio.vcxproj` 仍然保留，但现在不是推荐构建方式。
-
----
 
 ## 5. 运行程序
 
@@ -168,7 +168,7 @@ E:\Qt\Tools\CMake_64\bin\cmake.exe --build --preset mingw-debug
 带媒体文件参数：
 
 ```powershell
-.\tools\run-mingw.ps1 "E:\Videos\test.mp4"
+.\tools\run-mingw.ps1 "D:\Videos\test.mp4"
 ```
 
 ### 5.2 直接运行
@@ -348,15 +348,12 @@ MEDIASTUDIO_ENABLE_MYSQL=OFF
 如果已经准备好兼容 MinGW 的 MySQL/MariaDB Connector，可以重新配置：
 
 ```powershell
-E:\Qt\Tools\CMake_64\bin\cmake.exe -S . -B build\mingw-release -G Ninja `
-  -DCMAKE_MAKE_PROGRAM=E:/Qt/Tools/Ninja/ninja.exe `
-  -DCMAKE_C_COMPILER=E:/Qt/Tools/mingw1310_64/bin/gcc.exe `
-  -DCMAKE_CXX_COMPILER=E:/Qt/Tools/mingw1310_64/bin/g++.exe `
-  -DCMAKE_PREFIX_PATH=E:/Qt/6.11.0/mingw_64 `
-  -DMEDIASTUDIO_QT_ROOT=E:/Qt/6.11.0/mingw_64 `
+cmake -S . -B build\mingw-release -G Ninja `
+  -DCMAKE_PREFIX_PATH=<path-to-qt> `
+  -DMEDIASTUDIO_QT_ROOT=<path-to-qt> `
   -DMEDIASTUDIO_ENABLE_MYSQL=ON `
-  -DMEDIASTUDIO_MYSQL_CONNECTOR_ROOT=E:/mysql-connector-c++ `
-  -DMEDIASTUDIO_MYSQL_SERVER_ROOT="E:/MySQL/MySQL Server 8.0"
+  -DMEDIASTUDIO_MYSQL_CONNECTOR_ROOT=<path-to-mariadb-connector> `
+  -DMEDIASTUDIO_MYSQL_SERVER_ROOT=<path-to-mysql-server>
 ```
 
 ### 8.4 在代码中自动连接数据库
@@ -377,9 +374,9 @@ window.connectDatabase("127.0.0.1", "root", "your_password", "media_center");
 
 | 错误信息 | 原因 | 解决方法 |
 |---------|------|---------|
-| `cmake 不是可识别的命令` | 系统 PATH 没有 CMake | 使用 `E:\Qt\Tools\CMake_64\bin\cmake.exe` 或脚本 |
-| `ninja 不是可识别的命令` | 系统 PATH 没有 Ninja | 使用 `E:\Qt\Tools\Ninja\ninja.exe` 或脚本 |
-| `无法打开 avcodec.h` | FFmpeg 头文件路径未配置 | 检查 `MEDIASTUDIO_FFMPEG_ROOT=E:/ffmpeg` |
+| `cmake 不是可识别的命令` | 系统 PATH 没有 CMake | 将 CMake 加入 PATH，或改用本机绝对路径执行 |
+| `ninja 不是可识别的命令` | 系统 PATH 没有 Ninja | 将 Ninja 加入 PATH，或改用本机绝对路径执行 |
+| `无法打开 avcodec.h` | FFmpeg 头文件路径未配置 | 检查 `MEDIASTUDIO_FFMPEG_ROOT` |
 | `cannot find -l...` | 库文件路径或 ABI 不匹配 | 检查 FFmpeg/GLEW 是否为 x64 且与编译器兼容 |
 | `mysql_driver.h` 找不到 | 数据库依赖未配置 | 默认关闭 MySQL，或设置 `MEDIASTUDIO_ENABLE_MYSQL=ON` 并配置路径 |
 
@@ -416,16 +413,7 @@ qopenglfunctions.h is not compatible with GLEW
 
 如遇到问题，请检查：
 
-1. `E:\Qt\6.11.0\mingw_64` 是否存在
-2. `E:\Qt\Tools\CMake_64\bin\cmake.exe` 是否存在
-3. `E:\Qt\Tools\Ninja\ninja.exe` 是否存在
-4. `E:\Qt\Tools\mingw1310_64\bin\g++.exe` 是否存在
-5. `E:\ffmpeg` 和 `E:\OpenGl\glew-2.3.1-win32\glew-2.3.1` 路径是否正确
-6. 输出目录 `build\mingw-release` 中是否有运行时 DLL
-
-项目源码地址：
-
-```text
-https://github.com/moninber/windsurfPlayer.git
-git@github.com:moninber/windsurfPlayer.git
-```
+1. `cmake`、`ninja` 和编译器是否可用
+2. `MEDIASTUDIO_QT_ROOT`、`MEDIASTUDIO_FFMPEG_ROOT`、`MEDIASTUDIO_GLEW_ROOT` 是否正确
+3. Qt、FFmpeg、GLEW 是否与当前编译器和平台架构兼容
+4. 输出目录 `build\mingw-release` 中是否已经部署运行时 DLL

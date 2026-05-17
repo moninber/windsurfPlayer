@@ -19,6 +19,7 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 compile_commands.json
+CMakeUserPresets.json
 x64/
 Debug/
 Release/
@@ -26,9 +27,6 @@ Release/
 *.dll
 *.lib
 *.exp
-!third_party/mariadb/mingw64/bin/*.dll
-!third_party/mariadb/mingw64/lib/*.dll.a
-!third_party/mariadb/mingw64/share/licenses/**
 
 # Qt
 moc_*.cpp
